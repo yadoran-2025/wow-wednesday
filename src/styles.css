@@ -1,5 +1,6 @@
 :root {
   color-scheme: light;
+  --font-board: "Pretendard", "SUIT", "Noto Sans KR", "Malgun Gothic", "Apple SD Gothic Neo", sans-serif;
 }
 
 * {
@@ -33,7 +34,7 @@ select {
 .board__answer p,
 .board-preview .question__prompt,
 .flash-overlay p {
-  font-family: var(--font-serif);
+  font-family: var(--font-board);
 }
 
 .app-shell {
@@ -282,7 +283,7 @@ select {
   margin: 0;
   font-size: clamp(1.9rem, 3.7vw, 3.7rem);
   font-weight: var(--weight-extrabold);
-  line-height: 1.35;
+  line-height: 1.55;
   overflow-wrap: normal;
   word-break: keep-all;
 }
@@ -301,11 +302,11 @@ select {
 .char-slot {
   display: inline-grid;
   place-items: center;
-  width: 1.58em;
-  min-width: 1.58em;
-  max-width: 1.58em;
-  height: 1.48em;
-  margin: 0 0.055em;
+  width: 1.1em;
+  min-width: 1.1em;
+  max-width: 1.1em;
+  height: 1.18em;
+  margin: 0 0.06em;
   padding: 0;
   border: 2px solid transparent;
   border-radius: var(--radius-md);
@@ -323,11 +324,14 @@ select {
   border-color: rgba(20, 28, 43, 0.42);
   background: rgba(255, 255, 255, 0.9);
   color: var(--color-text-secondary);
+  box-shadow: inset 0 -2px 0 rgba(20, 28, 43, 0.06);
+}
+
+.char-slot__number {
   font-family: var(--font-sans);
   font-size: 0.34em;
   font-weight: var(--weight-extrabold);
-  letter-spacing: 0;
-  box-shadow: inset 0 -2px 0 rgba(20, 28, 43, 0.06);
+  line-height: 1;
 }
 
 .char-slot:hover,

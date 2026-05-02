@@ -229,7 +229,7 @@ function renderInteractiveBoard(problem) {
       return;
     }
 
-    wordBuffer.push(`<button class="char-slot is-hidden" data-action="reveal-char" data-char-index="${index}" aria-label="${blankNumber}번째 글자 공개">${blankNumber}</button>`);
+    wordBuffer.push(`<button class="char-slot is-hidden" data-action="reveal-char" data-char-index="${index}" aria-label="${blankNumber}번째 글자 공개"><span class="char-slot__number">${blankNumber}</span></button>`);
   });
 
   flushWord();
