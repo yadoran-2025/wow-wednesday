@@ -257,10 +257,13 @@ function renderAppBar() {
           <p>${escapeHtml(state.lesson.unit)} · ${escapeHtml(problem?.title || "문제 미선택")}</p>
         </div>
       </div>
-      <div class="mode-tabs" role="tablist" aria-label="작업 모드">
-        ${phaseLabels
-          .map(({ mode, label }) => `<button class="mode-tab ${state.mode === mode ? "is-active" : ""}" data-action="set-mode" data-mode="${mode}">${label}</button>`)
-          .join("")}
+      <div class="app-actions">
+        <a class="btn btn--secondary btn--sm blog-link" href="https://blog.naver.com/kimhsu1/222817823493" target="_blank" rel="noopener noreferrer">현수토리 선생님 블로그</a>
+        <div class="mode-tabs" role="tablist" aria-label="작업 모드">
+          ${phaseLabels
+            .map(({ mode, label }) => `<button class="mode-tab ${state.mode === mode ? "is-active" : ""}" data-action="set-mode" data-mode="${mode}">${label}</button>`)
+            .join("")}
+        </div>
       </div>
     </header>
   `;

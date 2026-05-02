@@ -80,6 +80,19 @@ select {
   white-space: nowrap;
 }
 
+.app-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: var(--space-2);
+  flex: 0 0 auto;
+}
+
+.blog-link {
+  text-decoration: none;
+  white-space: nowrap;
+}
+
 .mode-tabs {
   display: inline-flex;
   flex: 0 0 auto;
@@ -440,6 +453,16 @@ select {
   }
 
   .mode-tabs {
+    width: 100%;
+  }
+
+  .app-actions {
+    align-items: stretch;
+    flex-direction: column;
+    width: 100%;
+  }
+
+  .blog-link {
     width: 100%;
   }
 
