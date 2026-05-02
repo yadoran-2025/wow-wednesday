@@ -1,7 +1,9 @@
 const STORAGE_KEY = "wow-wednesday-maker-v4";
+const CUSTOM_PROBLEM_ID = "custom-problem";
 
 const phaseLabels = [
   { mode: "make", label: "제작하기" },
+  { mode: "rules", label: "룰 설명" },
   { mode: "run", label: "진행하기" },
 ];
 
@@ -12,6 +14,45 @@ const revealLabels = {
   answer: "정답 공개",
 };
 
+const referenceLessons = [
+  {
+    id: "history-hyeonsutory",
+    subject: "역사",
+    teacher: "현수토리 선생님",
+    url: "https://blog.naver.com/kimhsu1/222817823493",
+  },
+  {
+    id: "social-choeup",
+    subject: "사회",
+    teacher: "초읍중 주연지 선생님",
+    url: "https://band.us/band/61332773/post/5885",
+  },
+  {
+    id: "social-mugeuk",
+    subject: "사회",
+    teacher: "무극중 최주영 선생님",
+    url: "https://band.us/band/61332773/post/5713",
+  },
+];
+
+const defaultRulesText = `1. 노래를 듣자
+선생님이 제시하는 노래를 듣습니다.
+문제 부분은 카운트다운 후 제시됩니다.
+
+2. 노래를 쓰자
+문제 부분을 듣고 먼저 개별 받쓰판을 채웁니다.
+개별로 채운 답은 모둠원과 공유하며 3분간 의논합니다.
+의논이 끝나면 각 조 잼보드에 답을 써서 제출합니다.
+
+3. 힌트를 얻자
+첫 번째 기회에서 받아쓰기판을 오픈한 뒤, 가장 많이 막힌 조에게 힌트를 줍니다.
+원하는 받은 조부터 차례로 힌트를 받을 수 있습니다.
+
+4. 답을 맞히자
+첫 번째 받아쓰기판을 오픈하고 힌트를 받은 뒤, 문제 구간을 다시 한 번 더 듣습니다.
+최종 받아쓰기판을 3분간 조별로 논의하여 채웁니다.
+한 라운드당 두 번의 기회를 주고, 정답을 맞힌 조는 10점, 가장 근접한 조는 5점을 줍니다.`;
+
 let problemLibrary = [];
 let problemLibraryStatus = "loading";
 let problemLibraryError = "";
@@ -19,6 +60,8 @@ let problemLibraryError = "";
 const defaultState = {
   mode: "make",
   selectedProblemId: "",
+  rulesEditing: false,
+  rulesText: defaultRulesText,
   flashVisible: false,
   flashToken: 0,
   timer: {
@@ -31,6 +74,19 @@ const defaultState = {
     unit: "중세 서유럽 사회",
     songUrl: "https://www.youtube.com/watch?v=IR-YUXrNyn0",
   },
+  customProblem: {
+    id: CUSTOM_PROBLEM_ID,
+    savedId: "",
+    category: "",
+    title: "",
+    timeRange: "",
+    lyrics: "",
+    problemUrl: "",
+    audioName: "",
+    audioDataUrl: "",
+  },
+  savedProblems: [],
+  selectedSavedProblemId: "",
   revealed: {
     spacing: false,
     answer: false,
@@ -58,11 +114,16 @@ function loadState() {
 function normalizeState(value) {
   const next = { ...clone(defaultState), ...value };
   next.lesson = { ...clone(defaultState.lesson), ...(value.lesson || {}) };
+  next.customProblem = normalizeCustomProblem(value.customProblem || {});
+  next.savedProblems = Array.isArray(value.savedProblems) ? value.savedProblems.map(normalizeSavedProblem).filter(Boolean) : [];
+  next.selectedSavedProblemId = String(value.selectedSavedProblemId || next.savedProblems[0]?.id || "");
   next.revealed = { ...clone(defaultState.revealed), ...(value.revealed || {}) };
   next.revealedChars = value.revealedChars || {};
   next.timer = { ...clone(defaultState.timer), ...(value.timer || {}) };
   next.selectedProblemId = value.selectedProblemId || "";
-  next.mode = next.mode === "run" ? "run" : "make";
+  next.rulesEditing = Boolean(value.rulesEditing);
+  next.rulesText = String(value.rulesText || defaultRulesText);
+  next.mode = phaseLabels.some(({ mode }) => mode === next.mode) ? next.mode : "make";
   return next;
 }
 
@@ -78,7 +139,7 @@ async function loadProblemLibrary() {
     problemLibraryStatus = "ready";
     problemLibraryError = "";
 
-    if (!problemLibrary.some((problem) => problem.id === state.selectedProblemId)) {
+    if (state.selectedProblemId !== CUSTOM_PROBLEM_ID && !knownProblemIds().has(state.selectedProblemId)) {
       state.selectedProblemId = problemLibrary[0]?.id || "";
       clearReveals(state);
       saveState();
@@ -102,13 +163,45 @@ function normalizeProblem(problem, index) {
   };
 }
 
+function normalizeCustomProblem(problem) {
+  return {
+    id: CUSTOM_PROBLEM_ID,
+    savedId: String(problem.savedId || ""),
+    category: String(problem.category || ""),
+    title: String(problem.title || ""),
+    timeRange: String(problem.timeRange || ""),
+    lyrics: String(problem.lyrics || ""),
+    problemUrl: String(problem.problemUrl || ""),
+    audioName: String(problem.audioName || ""),
+    audioDataUrl: String(problem.audioDataUrl || ""),
+  };
+}
+
+function normalizeSavedProblem(problem) {
+  if (!problem || typeof problem !== "object") return null;
+  const id = String(problem.id || problem.savedId || `saved-${Date.now()}`);
+  return {
+    ...normalizeCustomProblem(problem),
+    id,
+    savedId: id,
+    category: String(problem.category || "직접 만든 문제"),
+    title: String(problem.title || "제목 없는 문제"),
+    createdAt: String(problem.createdAt || new Date().toISOString()),
+    updatedAt: String(problem.updatedAt || problem.createdAt || new Date().toISOString()),
+  };
+}
+
+function knownProblemIds() {
+  return new Set([...problemLibrary.map((problem) => problem.id), ...state.savedProblems.map((problem) => problem.id)]);
+}
+
 function saveState() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
 }
 
 function setState(updater) {
   updater(state);
-  if (!problemLibrary.some((problem) => problem.id === state.selectedProblemId)) {
+  if (state.selectedProblemId !== CUSTOM_PROBLEM_ID && !knownProblemIds().has(state.selectedProblemId)) {
     state.selectedProblemId = problemLibrary[0]?.id || "";
   }
   saveState();
@@ -120,7 +213,42 @@ function selectedProblemIndex() {
 }
 
 function currentProblem() {
+  if (state.selectedProblemId === CUSTOM_PROBLEM_ID) return customProblem();
+  const savedProblem = state.savedProblems.find((problem) => problem.id === state.selectedProblemId);
+  if (savedProblem) return savedProblem;
   return problemLibrary[selectedProblemIndex()] || null;
+}
+
+function customProblem() {
+  const problem = normalizeCustomProblem(state.customProblem);
+  return {
+    ...problem,
+    category: problem.category || "직접 만든 문제",
+    title: problem.title || "직접 만든 문제",
+  };
+}
+
+function customProblemIsReady() {
+  return Boolean(state.customProblem.title.trim() && state.customProblem.lyrics.trim());
+}
+
+function selectedSavedProblem() {
+  return state.savedProblems.find((problem) => problem.id === state.selectedSavedProblemId) || state.savedProblems[0] || null;
+}
+
+function savedProblemFromCustom(draft) {
+  const now = new Date().toISOString();
+  const existingId = draft.customProblem.savedId;
+  const existing = draft.savedProblems.find((problem) => problem.id === existingId);
+  const id = existing?.id || existingId || `saved-${Date.now()}`;
+  return normalizeSavedProblem({
+    ...draft.customProblem,
+    id,
+    savedId: id,
+    category: draft.customProblem.category || "직접 만든 문제",
+    createdAt: existing?.createdAt || now,
+    updatedAt: now,
+  });
 }
 
 function isWordChar(char) {
@@ -192,7 +320,7 @@ function getRevealedCharSet(problem) {
   return new Set(state.revealedChars[problem?.id] || []);
 }
 
-function renderInteractiveBoard(problem) {
+function renderInteractiveBoard(problem, options = {}) {
   const revealed = getRevealedCharSet(problem);
   const chars = Array.from(problem?.lyrics || "");
   const parts = [];
@@ -224,7 +352,7 @@ function renderInteractiveBoard(problem) {
     }
 
     blankNumber += 1;
-    if (state.revealed.answer || revealed.has(index)) {
+    if (options.forceAnswer || state.revealed.answer || revealed.has(index)) {
       wordBuffer.push(`<span class="char-slot is-open">${escapeHtml(char)}</span>`);
       return;
     }
@@ -240,10 +368,16 @@ function render() {
   const app = document.querySelector("#app");
   app.innerHTML = `
     ${renderAppBar()}
-    ${state.mode === "make" ? renderMaker() : renderRunner()}
+    ${renderCurrentMode()}
   `;
   bindEvents();
   syncTimer();
+}
+
+function renderCurrentMode() {
+  if (state.mode === "make") return renderMaker();
+  if (state.mode === "rules") return renderRules();
+  return renderRunner();
 }
 
 function renderAppBar() {
@@ -256,16 +390,87 @@ function renderAppBar() {
           <h1>${escapeHtml(state.lesson.title)}</h1>
           <p>${escapeHtml(state.lesson.unit)} · ${escapeHtml(problem?.title || "문제 미선택")}</p>
         </div>
-      </div>
-      <div class="app-actions">
-        <a class="btn btn--secondary btn--sm blog-link" href="https://blog.naver.com/kimhsu1/222817823493" target="_blank" rel="noopener noreferrer">현수토리 선생님 블로그</a>
         <div class="mode-tabs" role="tablist" aria-label="작업 모드">
           ${phaseLabels
             .map(({ mode, label }) => `<button class="mode-tab ${state.mode === mode ? "is-active" : ""}" data-action="set-mode" data-mode="${mode}">${label}</button>`)
             .join("")}
+          <div class="reference-menu">
+            <button class="mode-tab reference-tab" type="button">다른 수업 참고</button>
+            <div class="reference-flyout" aria-label="참고할 수 있는 다른 수업">
+              ${referenceLessons.map(renderReferenceButton).join("")}
+            </div>
+          </div>
         </div>
       </div>
+      <a class="dashboard-link" href="https://yadoran-2025.github.io/booong/" target="_blank" rel="noopener noreferrer">대시보드로 이동 -&gt;</a>
     </header>
+  `;
+}
+
+function renderReferenceButton(lesson) {
+  return `
+    <a class="reference-flyout__button" href="${escapeHtml(lesson.url)}" target="_blank" rel="noopener noreferrer">
+      <span class="chip">${escapeHtml(lesson.subject)}</span>
+      <strong>${escapeHtml(lesson.teacher)}</strong>
+    </a>
+  `;
+}
+
+function renderRules() {
+  const problem = currentProblem();
+
+  return `
+    <main class="rules-layout">
+      <section class="rules-sheet">
+        <div class="rules-sheet__header">
+          <div>
+            <span class="label-caps">룰 설명</span>
+            <h2>${escapeHtml(problem?.title || "수업 규칙")}</h2>
+          </div>
+          <div class="button-row">
+            <button class="btn btn--secondary btn--sm" data-action="toggle-rules-edit">${state.rulesEditing ? "수정 완료" : "룰 수정하기"}</button>
+            <button class="btn btn--primary btn--sm" data-action="set-mode" data-mode="run">진행하기</button>
+          </div>
+        </div>
+
+        ${state.rulesEditing ? renderRulesEditor() : renderRulesContent()}
+      </section>
+    </main>
+  `;
+}
+
+function renderRulesEditor() {
+  return `
+    <div class="rules-editor">
+      <label class="field">
+        <span class="field__label">룰 설명 내용</span>
+        <textarea class="field__input rules-editor__textarea" data-rules-text>${escapeHtml(state.rulesText)}</textarea>
+        <span class="field__helper">내용은 이 브라우저에 자동 저장됩니다. 한 줄을 비우면 문단이 나뉩니다.</span>
+      </label>
+      <div class="button-row form-actions">
+        <button class="btn btn--secondary btn--sm" data-action="reset-rules">기본 룰로 되돌리기</button>
+      </div>
+    </div>
+  `;
+}
+
+function renderRulesContent() {
+  const blocks = state.rulesText.split(/\n\s*\n/).map((block) => block.trim()).filter(Boolean);
+
+  return `
+    <div class="rules-content">
+      ${blocks.map(renderRuleBlock).join("")}
+    </div>
+  `;
+}
+
+function renderRuleBlock(block) {
+  const [title, ...bodyLines] = block.split("\n").map((line) => line.trim()).filter(Boolean);
+  return `
+    <article class="rule-card">
+      <h3>${escapeHtml(title || "룰")}</h3>
+      ${bodyLines.map((line) => `<p>${escapeHtml(line)}</p>`).join("")}
+    </article>
   `;
 }
 
@@ -274,61 +479,112 @@ function renderMaker() {
   return `
     <main class="maker-layout">
       <section class="control-stack">
-        <article class="panel">
-          <div class="panel-heading">
-            <div>
-              <span class="label-caps">수업 정보</span>
-              <h2>노래와 기본 정보</h2>
-            </div>
-            <button class="btn btn--ghost btn--sm" data-action="reset-all">기본값 복원</button>
-          </div>
-          <div class="editor-grid">
-            <label class="field">
-              <span class="field__label">수업 제목</span>
-              <input class="field__input" data-lesson-field="title" value="${escapeHtml(state.lesson.title)}" />
-            </label>
-            <label class="field">
-              <span class="field__label">단원명</span>
-              <input class="field__input" data-lesson-field="unit" value="${escapeHtml(state.lesson.unit)}" />
-            </label>
-            <label class="field editor-grid__wide">
-              <span class="field__label">YouTube 링크</span>
-              <input class="field__input" data-lesson-field="songUrl" value="${escapeHtml(state.lesson.songUrl)}" />
-              <span class="field__helper">진행 화면에서는 선택 문제의 노래 구간이 자동으로 반영됩니다.</span>
-            </label>
-          </div>
-        </article>
+        ${renderProblemPicker(problem)}
+        ${renderSavedProblemLibrary()}
 
         <article class="panel">
           <div class="panel-heading">
             <div>
-              <span class="label-caps">문제 자료</span>
-              <h2>현재 진행 문제</h2>
+              <span class="label-caps">직접 만들기</span>
+              <h2>새 문제 입력</h2>
             </div>
-            <span class="chip">${problem ? "선택됨" : "대기"}</span>
           </div>
-          <label class="field">
-            <span class="field__label">문제 선택</span>
-            <select class="field__input" data-problem-select ${problemLibraryStatus === "ready" && problemLibrary.length ? "" : "disabled"}>
-              ${problemLibrary.map(renderProblemOption).join("")}
-            </select>
-            <span class="field__helper">${renderProblemStatusText()}</span>
-          </label>
-          ${renderProblemMeta(problem)}
+          <div class="editor-grid">
+            <label class="field editor-grid__wide">
+              <span class="field__label">문제 제목</span>
+              <input class="field__input" data-custom-problem-field="title" value="${escapeHtml(state.customProblem.title)}" placeholder="예: 단원명 · 핵심 개념" />
+            </label>
+            <label class="field editor-grid__wide">
+              <span class="field__label">노래 구간</span>
+              <input class="field__input" data-custom-problem-field="timeRange" value="${escapeHtml(state.customProblem.timeRange)}" placeholder="예: 00:32 - 00:48" />
+            </label>
+            <label class="field editor-grid__wide">
+              <span class="field__label">문제 링크</span>
+              <input class="field__input" data-custom-problem-field="problemUrl" value="${escapeHtml(state.customProblem.problemUrl)}" placeholder="예: https://youtu.be/..." />
+            </label>
+            <label class="field editor-grid__wide">
+              <span class="field__label">음원 파일</span>
+              <input class="field__input file-input" data-custom-audio-file type="file" accept="audio/*" />
+              ${state.customProblem.audioName ? `<span class="field__helper">선택됨: ${escapeHtml(state.customProblem.audioName)}</span>` : ""}
+            </label>
+            <label class="field editor-grid__wide">
+              <span class="field__label">받쓰판 문장</span>
+              <textarea class="field__input field__textarea" data-custom-problem-field="lyrics" placeholder="받쓰판에 넣을 문장을 입력하세요.">${escapeHtml(state.customProblem.lyrics)}</textarea>
+              <span class="field__helper">제목과 문장을 입력한 뒤 직접 만든 문제를 사용하면 오른쪽 받쓰판과 진행하기 화면에 반영됩니다.</span>
+            </label>
+          </div>
+          <div class="button-row form-actions">
+            <button class="btn btn--primary btn--sm" data-action="save-custom-problem">문제 저장</button>
+            <button class="btn btn--primary btn--sm" data-action="use-custom-problem">직접 만든 문제 사용</button>
+            <button class="btn btn--secondary btn--sm" data-action="clear-custom-audio" ${state.customProblem.audioDataUrl ? "" : "disabled"}>음원 지우기</button>
+            <button class="btn btn--secondary btn--sm" data-action="clear-custom-problem">입력 지우기</button>
+          </div>
         </article>
       </section>
 
       <section class="preview-panel">
         <div class="panel-heading">
           <div>
-            <span class="label-caps">자동 생성 미리보기</span>
             <h2>${escapeHtml(problem?.title || "문제를 선택하세요")}</h2>
           </div>
-          <button class="btn btn--primary btn--sm" data-action="set-mode" data-mode="run" ${problem ? "" : "disabled"}>진행하기</button>
         </div>
         ${renderSelectedProblemPreview()}
       </section>
     </main>
+  `;
+}
+
+function renderSavedProblemLibrary() {
+  return `
+    <article class="panel saved-panel">
+      <div class="panel-heading">
+        <div>
+          <span class="label-caps">내 문제 보관함</span>
+          <h2>저장한 문제</h2>
+        </div>
+        <span class="chip chip--gray">${state.savedProblems.length}개</span>
+      </div>
+      <label class="field">
+        <span class="sr-only">저장한 문제 선택</span>
+        <select class="field__input" data-saved-problem-select ${state.savedProblems.length ? "" : "disabled"}>
+          ${state.savedProblems.length ? state.savedProblems.map(renderSavedProblemOption).join("") : "<option>저장한 문제가 없습니다</option>"}
+        </select>
+        <span class="field__helper">직접 만든 문제를 저장하면 이 브라우저에만 보관됩니다.</span>
+      </label>
+      <div class="button-row form-actions">
+        <button class="btn btn--primary btn--sm" data-action="load-saved-problem" ${state.savedProblems.length ? "" : "disabled"}>불러오기</button>
+        <button class="btn btn--secondary btn--sm" data-action="delete-saved-problem" ${state.savedProblems.length ? "" : "disabled"}>삭제</button>
+      </div>
+    </article>
+  `;
+}
+
+function renderSavedProblemOption(problem) {
+  const selected = problem.id === state.selectedSavedProblemId ? "selected" : "";
+  const label = `${problem.title}${problem.timeRange ? ` · ${problem.timeRange}` : ""}`;
+  return `<option value="${escapeHtml(problem.id)}" ${selected}>${escapeHtml(label)}</option>`;
+}
+
+function renderProblemPicker(problem) {
+  if (problemLibraryStatus === "ready" && !problemLibrary.length) return "";
+
+  return `
+    <article class="panel">
+      <div class="panel-heading">
+        <div>
+          <h2>문제 선택</h2>
+        </div>
+      </div>
+      <label class="field">
+        <span class="sr-only">문제 선택</span>
+        <select class="field__input" data-problem-select ${problemLibraryStatus === "ready" && problemLibrary.length ? "" : "disabled"}>
+          ${state.selectedProblemId === CUSTOM_PROBLEM_ID ? `<option value="${CUSTOM_PROBLEM_ID}" selected>직접 만든 문제 사용 중</option>` : ""}
+          ${problemLibrary.map(renderProblemOption).join("")}
+        </select>
+        ${renderProblemStatusText() ? `<span class="field__helper">${renderProblemStatusText()}</span>` : ""}
+      </label>
+      ${renderProblemMeta(problem)}
+    </article>
   `;
 }
 
@@ -341,7 +597,7 @@ function renderProblemStatusText() {
   if (problemLibraryStatus === "loading") return "문제 JSON을 불러오는 중입니다.";
   if (problemLibraryStatus === "error") return `문제 JSON을 불러오지 못했습니다. ${problemLibraryError}`;
   if (!problemLibrary.length) return "문제 자료가 없습니다.";
-  return "제작하기에서 고른 문제 1개가 진행하기 화면에 표시됩니다.";
+  return "";
 }
 
 function renderProblemMeta(problem) {
@@ -350,12 +606,16 @@ function renderProblemMeta(problem) {
     <div class="meta-row">
       <span class="chip">${escapeHtml(problem.category)}</span>
       <span class="chip chip--gray">${escapeHtml(problem.timeRange || "구간 미입력")}</span>
-      <span class="chip chip--gray">1 / 1</span>
     </div>
   `;
 }
 
 function renderSelectedProblemPreview() {
+  const problem = currentProblem();
+  if (state.selectedProblemId === CUSTOM_PROBLEM_ID && problem.lyrics.trim()) {
+    return renderPracticeBoard(problem, { forceAnswer: true });
+  }
+
   if (problemLibraryStatus === "loading") {
     return renderEmptyState("문제 자료를 불러오는 중", "data/problems.json을 읽고 있습니다.");
   }
@@ -364,27 +624,11 @@ function renderSelectedProblemPreview() {
     return renderEmptyState("문제 자료를 불러오지 못했습니다", "로컬 파일로 직접 열었다면 로컬 서버 주소로 접속해 주세요.");
   }
 
-  const problem = currentProblem();
   if (!problem) {
-    return renderEmptyState("문제 자료가 없습니다", "나중에 받은 문제 JSON을 data/problems.json에 채워 넣으면 여기에 표시됩니다.");
+    return renderEmptyState("직접 만든 문제가 없습니다", "왼쪽에서 제목과 받쓰판 문장을 입력한 뒤 직접 만든 문제를 사용해 주세요.");
   }
 
-  return `
-    <div class="preview-stack">
-      <article class="question board-preview">
-        <span class="callout__label">받쓰판</span>
-        <div class="question__prompt">${renderGeneratedText(makeBlankBoard(problem.lyrics))}</div>
-      </article>
-      <article class="callout">
-        <span class="callout__label">한 글자 보기</span>
-        <p>진행 화면에서 원하는 번호 칸을 클릭하면 해당 글자만 공개됩니다.</p>
-      </article>
-      <article class="question board-preview">
-        <span class="callout__label">띄어쓰기 보기</span>
-        <div class="question__prompt">${renderGeneratedText(makeSpacingHint(problem.lyrics))}</div>
-      </article>
-    </div>
-  `;
+  return renderPracticeBoard(problem, { forceAnswer: true });
 }
 
 function renderEmptyState(title, description) {
@@ -397,10 +641,34 @@ function renderEmptyState(title, description) {
   `;
 }
 
+function renderPracticeBoard(problem, options = {}) {
+  const hasPickedLetters = (state.revealedChars[problem?.id] || []).length > 0;
+  const answerRevealed = options.forceAnswer || state.revealed.answer;
+
+  return `
+    <article class="board">
+      <div class="board__topline">
+        <span>받쓰판</span>
+        ${options.forceAnswer ? "" : `<strong>${escapeHtml(getActiveRevealLabel(hasPickedLetters))}</strong>`}
+      </div>
+      <div class="board__answer ${answerRevealed ? "is-revealed" : ""}">
+        <p>${problem ? renderInteractiveBoard(problem, { forceAnswer: answerRevealed }) : "제작하기에서 문제를 선택하세요."}</p>
+      </div>
+      ${options.forceAnswer ? "" : `
+        <div class="board-actions">
+          <button class="btn btn--secondary btn--sm" data-action="reset-char-hints" ${problem ? "" : "disabled"}>글자 힌트 초기화</button>
+          <button class="btn btn--secondary btn--sm" data-action="toggle-reveal" data-reveal="spacing" ${problem ? "" : "disabled"}>${state.revealed.spacing ? "띄어쓰기 닫기" : "띄어쓰기 보기"}</button>
+          <button class="btn btn--primary btn--sm" data-action="show-flash" ${problem ? "" : "disabled"}>플래시 보기</button>
+          <button class="btn btn--primary btn--sm" data-action="toggle-reveal" data-reveal="answer" ${problem ? "" : "disabled"}>${state.revealed.answer ? "정답 가리기" : "정답 공개"}</button>
+        </div>
+      `}
+    </article>
+  `;
+}
+
 function renderRunner() {
   const problem = currentProblem();
-  const embedUrl = youtubeEmbedUrl(state.lesson.songUrl, problem?.timeRange);
-  const hasPickedLetters = (state.revealedChars[problem?.id] || []).length > 0;
+  const media = renderProblemMedia(problem);
 
   return `
     <main class="run-layout">
@@ -417,21 +685,7 @@ function renderRunner() {
           </div>
         </div>
 
-        <article class="board">
-          <div class="board__topline">
-            <span>받쓰판</span>
-            <strong>${escapeHtml(getActiveRevealLabel(hasPickedLetters))}</strong>
-          </div>
-          <div class="board__answer ${state.revealed.answer ? "is-revealed" : ""}">
-            <p>${problem ? renderInteractiveBoard(problem) : "제작하기에서 문제를 선택하세요."}</p>
-          </div>
-          <div class="board-actions">
-            <button class="btn btn--secondary btn--sm" data-action="reset-char-hints" ${problem ? "" : "disabled"}>글자 힌트 초기화</button>
-            <button class="btn btn--secondary btn--sm" data-action="toggle-reveal" data-reveal="spacing" ${problem ? "" : "disabled"}>${state.revealed.spacing ? "띄어쓰기 닫기" : "띄어쓰기 보기"}</button>
-            <button class="btn btn--primary btn--sm" data-action="show-flash" ${problem ? "" : "disabled"}>플래시 보기</button>
-            <button class="btn btn--primary btn--sm" data-action="toggle-reveal" data-reveal="answer" ${problem ? "" : "disabled"}>${state.revealed.answer ? "정답 가리기" : "정답 공개"}</button>
-          </div>
-        </article>
+        ${renderPracticeBoard(problem)}
       </section>
 
       <aside class="side-rail">
@@ -453,13 +707,36 @@ function renderRunner() {
             <span class="label-caps">노래 구간</span>
             <strong>${escapeHtml(problem?.timeRange || "구간 미입력")}</strong>
           </div>
-          ${embedUrl ? `<iframe src="${embedUrl}" title="수업 노래 영상" allowfullscreen></iframe>` : renderEmptyState("노래 링크가 없습니다", "제작하기에서 YouTube 링크를 입력하세요.")}
-          <a class="media-link" href="${escapeHtml(state.lesson.songUrl)}" target="_blank" rel="noreferrer">YouTube에서 열기</a>
+          ${media}
         </section>
       </aside>
     </main>
     ${state.flashVisible ? `<div class="flash-overlay" role="dialog" aria-label="플래시 힌트"><p>${renderGeneratedText(makeFlashText(problem?.lyrics))}</p></div>` : ""}
   `;
+}
+
+function renderProblemMedia(problem) {
+  if (problem?.audioDataUrl) {
+    return `
+      <audio class="audio-player" controls src="${escapeHtml(problem.audioDataUrl)}"></audio>
+      <span class="field__helper">${escapeHtml(problem.audioName || "업로드한 음원")}</span>
+    `;
+  }
+
+  const mediaUrl = problem?.problemUrl || state.lesson.songUrl;
+  const embedUrl = youtubeEmbedUrl(mediaUrl, problem?.timeRange);
+  if (embedUrl) {
+    return `
+      <iframe src="${embedUrl}" title="수업 노래 영상" allowfullscreen></iframe>
+      <a class="media-link" href="${escapeHtml(mediaUrl)}" target="_blank" rel="noreferrer">링크 열기</a>
+    `;
+  }
+
+  if (mediaUrl) {
+    return `<a class="media-link" href="${escapeHtml(mediaUrl)}" target="_blank" rel="noreferrer">문제 링크 열기</a>`;
+  }
+
+  return renderEmptyState("링크나 음원이 없습니다", "직접 만들기에서 문제 링크를 입력하거나 음원 파일을 선택하세요.");
 }
 
 function getActiveRevealLabel(hasPickedLetters) {
@@ -477,8 +754,20 @@ function bindEvents() {
   document.querySelectorAll("[data-lesson-field]").forEach((element) => {
     element.addEventListener("input", onLessonInput);
   });
+  document.querySelectorAll("[data-custom-problem-field]").forEach((element) => {
+    element.addEventListener("input", onCustomProblemInput);
+  });
+  document.querySelectorAll("[data-custom-audio-file]").forEach((element) => {
+    element.addEventListener("change", onCustomAudioFile);
+  });
+  document.querySelectorAll("[data-rules-text]").forEach((element) => {
+    element.addEventListener("input", onRulesInput);
+  });
   document.querySelectorAll("[data-problem-select]").forEach((element) => {
     element.addEventListener("change", onProblemSelect);
+  });
+  document.querySelectorAll("[data-saved-problem-select]").forEach((element) => {
+    element.addEventListener("change", onSavedProblemSelect);
   });
 }
 
@@ -491,8 +780,15 @@ function onAction(event) {
     return;
   }
 
+  if ((action === "use-custom-problem" || action === "save-custom-problem") && !customProblemIsReady()) {
+    alert("문제 제목과 받쓰판 문장을 입력해 주세요.");
+    return;
+  }
+
   setState((draft) => {
     if (action === "set-mode") draft.mode = target.dataset.mode;
+    if (action === "toggle-rules-edit") draft.rulesEditing = !draft.rulesEditing;
+    if (action === "reset-rules" && confirm("룰 설명을 기본 내용으로 되돌릴까요?")) draft.rulesText = defaultRulesText;
     if (action === "toggle-reveal") {
       const key = target.dataset.reveal;
       draft.revealed[key] = !draft.revealed[key];
@@ -511,6 +807,50 @@ function onAction(event) {
     if (action === "reset-char-hints") {
       const problem = currentProblem();
       if (problem) draft.revealedChars[problem.id] = [];
+    }
+    if (action === "use-custom-problem") {
+      if (!customProblemIsReady()) return;
+      draft.customProblem = normalizeCustomProblem(draft.customProblem);
+      draft.selectedProblemId = CUSTOM_PROBLEM_ID;
+      clearReveals(draft);
+    }
+    if (action === "save-custom-problem") {
+      const savedProblem = savedProblemFromCustom(draft);
+      const index = draft.savedProblems.findIndex((problem) => problem.id === savedProblem.id);
+      if (index >= 0) draft.savedProblems[index] = savedProblem;
+      else draft.savedProblems.unshift(savedProblem);
+      draft.customProblem = normalizeCustomProblem({ ...savedProblem, id: CUSTOM_PROBLEM_ID });
+      draft.selectedSavedProblemId = savedProblem.id;
+      draft.selectedProblemId = CUSTOM_PROBLEM_ID;
+      clearReveals(draft);
+    }
+    if (action === "load-saved-problem") {
+      const savedProblem = selectedSavedProblem();
+      if (!savedProblem) return;
+      draft.customProblem = normalizeCustomProblem({ ...savedProblem, id: CUSTOM_PROBLEM_ID, savedId: savedProblem.id });
+      draft.selectedSavedProblemId = savedProblem.id;
+      draft.selectedProblemId = CUSTOM_PROBLEM_ID;
+      clearReveals(draft);
+    }
+    if (action === "delete-saved-problem" && confirm("저장한 문제를 삭제할까요?")) {
+      const savedProblem = selectedSavedProblem();
+      if (!savedProblem) return;
+      const isEditingDeletedProblem = draft.customProblem.savedId === savedProblem.id;
+      draft.savedProblems = draft.savedProblems.filter((problem) => problem.id !== savedProblem.id);
+      draft.selectedSavedProblemId = draft.savedProblems[0]?.id || "";
+      if (isEditingDeletedProblem) draft.customProblem = clone(defaultState.customProblem);
+      if (draft.selectedProblemId === savedProblem.id) draft.selectedProblemId = draft.customProblem.title.trim() && draft.customProblem.lyrics.trim() ? CUSTOM_PROBLEM_ID : "";
+      if (isEditingDeletedProblem && draft.selectedProblemId === CUSTOM_PROBLEM_ID) draft.selectedProblemId = "";
+      clearReveals(draft);
+    }
+    if (action === "clear-custom-problem") {
+      draft.customProblem = clone(defaultState.customProblem);
+      if (draft.selectedProblemId === CUSTOM_PROBLEM_ID) draft.selectedProblemId = problemLibrary[0]?.id || "";
+      clearReveals(draft);
+    }
+    if (action === "clear-custom-audio") {
+      draft.customProblem.audioName = "";
+      draft.customProblem.audioDataUrl = "";
     }
     if (action === "toggle-timer") draft.timer.running = !draft.timer.running;
     if (action === "reset-timer") {
@@ -535,6 +875,35 @@ function onProblemSelect(event) {
   clearReveals(state);
   saveState();
   render();
+}
+
+function onSavedProblemSelect(event) {
+  state.selectedSavedProblemId = event.currentTarget.value;
+  saveState();
+  render();
+}
+
+function onCustomProblemInput(event) {
+  state.customProblem[event.currentTarget.dataset.customProblemField] = event.currentTarget.value;
+  saveState();
+}
+
+function onCustomAudioFile(event) {
+  const file = event.currentTarget.files?.[0];
+  if (!file) return;
+  const reader = new FileReader();
+  reader.addEventListener("load", () => {
+    state.customProblem.audioName = file.name;
+    state.customProblem.audioDataUrl = String(reader.result || "");
+    saveState();
+    render();
+  });
+  reader.readAsDataURL(file);
+}
+
+function onRulesInput(event) {
+  state.rulesText = event.currentTarget.value;
+  saveState();
 }
 
 function onLessonInput(event) {
