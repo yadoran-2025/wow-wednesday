@@ -494,11 +494,11 @@ function renderMaker() {
               <span class="field__label">문제 제목</span>
               <input class="field__input" data-custom-problem-field="title" value="${escapeHtml(state.customProblem.title)}" placeholder="예: 단원명 · 핵심 개념" />
             </label>
-            <label class="field editor-grid__wide">
+            <label class="field">
               <span class="field__label">노래 구간</span>
               <input class="field__input" data-custom-problem-field="timeRange" value="${escapeHtml(state.customProblem.timeRange)}" placeholder="예: 00:32 - 00:48" />
             </label>
-            <label class="field editor-grid__wide">
+            <label class="field">
               <span class="field__label">문제 링크</span>
               <input class="field__input" data-custom-problem-field="problemUrl" value="${escapeHtml(state.customProblem.problemUrl)}" placeholder="예: https://youtu.be/..." />
             </label>
