@@ -673,8 +673,7 @@ function renderPracticeBoard(problem, options = {}) {
       ${options.forceAnswer ? "" : `
         <div class="board-actions">
           <button class="btn btn--secondary btn--sm" data-action="reset-char-hints" ${problem ? "" : "disabled"}>글자 힌트 초기화</button>
-          <button class="btn btn--secondary btn--sm" data-action="toggle-reveal" data-reveal="spacing" ${problem ? "" : "disabled"}>${state.revealed.spacing ? "띄어쓰기 닫기" : "띄어쓰기 보기"}</button>
-          <button class="btn btn--primary btn--sm" data-action="show-flash" ${problem ? "" : "disabled"}>플래시 보기</button>
+          <button class="btn btn--primary btn--sm" data-action="show-flash" ${problem ? "" : "disabled"}>0.5초 힌트</button>
           <button class="btn btn--primary btn--sm" data-action="toggle-reveal" data-reveal="answer" ${problem ? "" : "disabled"}>${state.revealed.answer ? "정답 가리기" : "정답 공개"}</button>
         </div>
       `}
@@ -758,7 +757,6 @@ function renderProblemMedia(problem) {
 function getActiveRevealLabel(hasPickedLetters) {
   if (state.revealed.answer) return revealLabels.answer;
   if (hasPickedLetters) return revealLabels.letterPick;
-  if (state.revealed.spacing) return revealLabels.spacing;
   return revealLabels.blank;
 }
 
@@ -954,7 +952,7 @@ function showFlash() {
     setState((draft) => {
       draft.flashVisible = false;
     });
-  }, 1200);
+  }, 500);
 }
 
 function syncTimer() {
