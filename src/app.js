@@ -232,6 +232,20 @@ function customProblemIsReady() {
   return Boolean(state.customProblem.title.trim() && state.customProblem.lyrics.trim());
 }
 
+function customProblemHasDraft() {
+  return Boolean(
+    state.customProblem.title.trim() ||
+      state.customProblem.timeRange.trim() ||
+      state.customProblem.problemUrl.trim() ||
+      state.customProblem.audioDataUrl ||
+      state.customProblem.lyrics.trim()
+  );
+}
+
+function makerPreviewProblem() {
+  return customProblemHasDraft() ? customProblem() : currentProblem();
+}
+
 function selectedSavedProblem() {
   return state.savedProblems.find((problem) => problem.id === state.selectedSavedProblemId) || state.savedProblems[0] || null;
 }
@@ -476,6 +490,7 @@ function renderRuleBlock(block) {
 
 function renderMaker() {
   const problem = currentProblem();
+  const previewProblem = makerPreviewProblem();
   return `
     <main class="maker-layout">
       <section class="control-stack">
@@ -510,7 +525,7 @@ function renderMaker() {
             <label class="field editor-grid__wide">
               <span class="field__label">받쓰판 문장</span>
               <textarea class="field__input field__textarea" data-custom-problem-field="lyrics" placeholder="받쓰판에 넣을 문장을 입력하세요.">${escapeHtml(state.customProblem.lyrics)}</textarea>
-              <span class="field__helper">제목과 문장을 입력한 뒤 직접 만든 문제를 사용하면 오른쪽 받쓰판과 진행하기 화면에 반영됩니다.</span>
+              <span class="field__helper">문장을 입력하면 오른쪽 받쓰판 미리보기에 바로 반영됩니다.</span>
             </label>
           </div>
           <div class="button-row form-actions">
@@ -522,10 +537,12 @@ function renderMaker() {
       <section class="preview-panel">
         <div class="panel-heading">
           <div>
-            <h2>${escapeHtml(problem?.title || "문제를 선택하세요")}</h2>
+            <h2 data-maker-preview-title>${escapeHtml(previewProblem?.title || "문제를 선택하세요")}</h2>
           </div>
         </div>
-        ${renderSelectedProblemPreview()}
+        <div data-maker-preview-body>
+          ${renderSelectedProblemPreview(previewProblem)}
+        </div>
       </section>
     </main>
   `;
@@ -607,9 +624,11 @@ function renderProblemMeta(problem) {
   `;
 }
 
-function renderSelectedProblemPreview() {
-  const problem = currentProblem();
-  if (state.selectedProblemId === CUSTOM_PROBLEM_ID && problem.lyrics.trim()) {
+function renderSelectedProblemPreview(problem = makerPreviewProblem()) {
+  if (customProblemHasDraft()) {
+    if (!problem?.lyrics.trim()) {
+      return renderEmptyState("받쓰판 문장을 입력하세요", "왼쪽에 문장을 쓰면 이곳에 미리보기가 바로 표시됩니다.");
+    }
     return renderPracticeBoard(problem, { forceAnswer: true });
   }
 
@@ -883,6 +902,17 @@ function onSavedProblemSelect(event) {
 function onCustomProblemInput(event) {
   state.customProblem[event.currentTarget.dataset.customProblemField] = event.currentTarget.value;
   saveState();
+  refreshMakerPreview();
+}
+
+function refreshMakerPreview() {
+  const title = document.querySelector("[data-maker-preview-title]");
+  const body = document.querySelector("[data-maker-preview-body]");
+  if (!title || !body) return;
+
+  const previewProblem = makerPreviewProblem();
+  title.textContent = previewProblem?.title || "문제를 선택하세요";
+  body.innerHTML = renderSelectedProblemPreview(previewProblem);
 }
 
 function onCustomAudioFile(event) {
