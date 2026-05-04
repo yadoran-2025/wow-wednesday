@@ -515,9 +515,6 @@ function renderMaker() {
           </div>
           <div class="button-row form-actions">
             <button class="btn btn--primary btn--sm" data-action="save-custom-problem">문제 저장</button>
-            <button class="btn btn--primary btn--sm" data-action="use-custom-problem">직접 만든 문제 사용</button>
-            <button class="btn btn--secondary btn--sm" data-action="clear-custom-audio" ${state.customProblem.audioDataUrl ? "" : "disabled"}>음원 지우기</button>
-            <button class="btn btn--secondary btn--sm" data-action="clear-custom-problem">입력 지우기</button>
           </div>
         </article>
       </section>
