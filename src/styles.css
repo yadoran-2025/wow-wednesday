@@ -104,6 +104,10 @@ select {
   flex: 1 1 auto;
 }
 
+.app-brand > div:not(.mode-tabs) {
+  min-width: 0;
+}
+
 .app-brand h1 {
   margin: 0;
   color: var(--app-ink);
@@ -753,12 +757,16 @@ select {
   }
 
   .app-brand {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
     align-items: center;
-    flex-direction: row;
+    gap: var(--space-2) var(--space-3);
+    width: 100%;
   }
 
   .mode-tabs {
     display: grid;
+    grid-column: 1 / -1;
     grid-template-columns: repeat(2, minmax(0, 1fr));
     width: 100%;
   }
