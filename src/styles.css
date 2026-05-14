@@ -436,6 +436,10 @@ select {
   color: var(--app-muted);
 }
 
+.field__helper--warning {
+  color: #9a4f00;
+}
+
 .btn--primary {
   background: var(--color-primary);
   color: #fffdf8;

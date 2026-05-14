@@ -1,5 +1,9 @@
 const STORAGE_KEY = "wow-wednesday-maker-v4";
 const CUSTOM_PROBLEM_ID = "custom-problem";
+const AUDIO_DB_NAME = "wow-wednesday-audio";
+const AUDIO_DB_VERSION = 1;
+const AUDIO_STORE_NAME = "audio-files";
+const CUSTOM_AUDIO_KEY = "custom-draft";
 
 const phaseLabels = [
   { mode: "make", label: "제작하기" },
@@ -56,6 +60,7 @@ const defaultRulesText = `1. 노래를 듣자
 let problemLibrary = [];
 let problemLibraryStatus = "loading";
 let problemLibraryError = "";
+let storageWarning = "";
 
 const defaultState = {
   mode: "make",
@@ -196,16 +201,115 @@ function knownProblemIds() {
 }
 
 function saveState() {
-  localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+  storageWarning = "";
+
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(stateWithoutAudioData(state)));
+    return true;
+  } catch (error) {
+    storageWarning = "브라우저 저장 공간이 부족해 현재 내용을 저장하지 못했습니다.";
+    console.warn(storageWarning, error);
+    return false;
+  }
+}
+
+function stateWithoutAudioData(value) {
+  const next = clone(value);
+  next.customProblem.audioName = "";
+  next.customProblem.audioDataUrl = "";
+  next.savedProblems = next.savedProblems.map((problem) => ({
+    ...problem,
+    audioName: "",
+    audioDataUrl: "",
+  }));
+  return next;
+}
+
+function openAudioDb() {
+  return new Promise((resolve, reject) => {
+    if (!("indexedDB" in window)) {
+      reject(new Error("이 브라우저는 음원 저장소를 지원하지 않습니다."));
+      return;
+    }
+
+    const request = indexedDB.open(AUDIO_DB_NAME, AUDIO_DB_VERSION);
+    request.addEventListener("upgradeneeded", () => {
+      request.result.createObjectStore(AUDIO_STORE_NAME, { keyPath: "id" });
+    });
+    request.addEventListener("success", () => resolve(request.result));
+    request.addEventListener("error", () => reject(request.error));
+  });
+}
+
+function withAudioStore(mode, callback) {
+  return openAudioDb().then((db) => new Promise((resolve, reject) => {
+    const transaction = db.transaction(AUDIO_STORE_NAME, mode);
+    const store = transaction.objectStore(AUDIO_STORE_NAME);
+    let callbackResult;
+
+    transaction.addEventListener("complete", () => {
+      db.close();
+      resolve(callbackResult);
+    });
+    transaction.addEventListener("error", () => {
+      db.close();
+      reject(transaction.error);
+    });
+
+    callbackResult = callback(store);
+  }));
+}
+
+function saveAudioRecord(id, audioName, audioDataUrl) {
+  if (!audioDataUrl) return deleteAudioRecord(id);
+  return withAudioStore("readwrite", (store) => store.put({ id, audioName, audioDataUrl })).catch((error) => {
+    storageWarning = "브라우저 저장 공간이 부족해 음원 파일을 저장하지 못했습니다.";
+    console.warn(storageWarning, error);
+  });
+}
+
+function getAudioRecord(id) {
+  return withAudioStore("readonly", (store) => new Promise((resolve, reject) => {
+    const request = store.get(id);
+    request.addEventListener("success", () => resolve(request.result || null));
+    request.addEventListener("error", () => reject(request.error));
+  })).catch(() => null);
+}
+
+function deleteAudioRecord(id) {
+  return withAudioStore("readwrite", (store) => store.delete(id)).catch(() => {});
+}
+
+function clearAudioStore() {
+  return withAudioStore("readwrite", (store) => store.clear()).catch(() => {});
+}
+
+async function hydrateStateAudio() {
+  const savedAudioRecords = await Promise.all(
+    state.savedProblems.map(async (problem) => [problem.id, await getAudioRecord(problem.id)])
+  );
+  const savedAudioById = new Map(savedAudioRecords.filter(([, audio]) => audio));
+  state.savedProblems = state.savedProblems.map((problem) => {
+    const audio = savedAudioById.get(problem.id);
+    return audio ? { ...problem, audioName: audio.audioName || "", audioDataUrl: audio.audioDataUrl || "" } : problem;
+  });
+
+  const customAudioKey = state.customProblem.savedId || CUSTOM_AUDIO_KEY;
+  const customAudio = await getAudioRecord(customAudioKey);
+  if (customAudio) {
+    state.customProblem.audioName = customAudio.audioName || "";
+    state.customProblem.audioDataUrl = customAudio.audioDataUrl || "";
+  }
 }
 
 function setState(updater) {
-  updater(state);
+  const result = updater(state);
   if (state.selectedProblemId !== CUSTOM_PROBLEM_ID && !knownProblemIds().has(state.selectedProblemId)) {
     state.selectedProblemId = problemLibrary[0]?.id || "";
   }
   saveState();
   render();
+  return result;
 }
 
 function selectedProblemIndex() {
@@ -250,11 +354,15 @@ function selectedSavedProblem() {
   return state.savedProblems.find((problem) => problem.id === state.selectedSavedProblemId) || state.savedProblems[0] || null;
 }
 
-function savedProblemFromCustom(draft) {
+function createSavedProblemId() {
+  return `saved-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function savedProblemFromCustom(draft, options = {}) {
   const now = new Date().toISOString();
-  const existingId = draft.customProblem.savedId;
+  const existingId = options.forceNew ? "" : draft.customProblem.savedId;
   const existing = draft.savedProblems.find((problem) => problem.id === existingId);
-  const id = existing?.id || existingId || `saved-${Date.now()}`;
+  const id = existing?.id || existingId || createSavedProblemId();
   return normalizeSavedProblem({
     ...draft.customProblem,
     id,
@@ -491,6 +599,7 @@ function renderRuleBlock(block) {
 function renderMaker() {
   const problem = currentProblem();
   const previewProblem = makerPreviewProblem();
+  const isEditingSavedProblem = Boolean(state.customProblem.savedId && state.savedProblems.some((problem) => problem.id === state.customProblem.savedId));
   return `
     <main class="maker-layout">
       <section class="control-stack">
@@ -521,6 +630,7 @@ function renderMaker() {
               <span class="field__label">음원 파일</span>
               <input class="field__input file-input" data-custom-audio-file type="file" accept="audio/*" />
               ${state.customProblem.audioName ? `<span class="field__helper">선택됨: ${escapeHtml(state.customProblem.audioName)}</span>` : ""}
+              ${storageWarning ? `<span class="field__helper field__helper--warning">${escapeHtml(storageWarning)}</span>` : ""}
             </label>
             <label class="field editor-grid__wide">
               <span class="field__label">받쓰판 문장</span>
@@ -530,6 +640,7 @@ function renderMaker() {
           </div>
           <div class="button-row form-actions">
             <button class="btn btn--primary btn--sm" data-action="save-custom-problem">문제 저장</button>
+            ${isEditingSavedProblem ? `<button class="btn btn--secondary btn--sm" data-action="save-custom-problem-as-new">새 문제로 저장</button>` : ""}
           </div>
         </article>
       </section>
@@ -564,6 +675,7 @@ function renderSavedProblemLibrary() {
           ${state.savedProblems.length ? state.savedProblems.map(renderSavedProblemOption).join("") : "<option>저장한 문제가 없습니다</option>"}
         </select>
         <span class="field__helper">직접 만든 문제를 저장하면 이 브라우저에만 보관됩니다.</span>
+        ${storageWarning ? `<span class="field__helper field__helper--warning">${escapeHtml(storageWarning)}</span>` : ""}
       </label>
       <div class="button-row form-actions">
         <button class="btn btn--primary btn--sm" data-action="load-saved-problem" ${state.savedProblems.length ? "" : "disabled"}>불러오기</button>
@@ -785,7 +897,7 @@ function bindEvents() {
   });
 }
 
-function onAction(event) {
+async function onAction(event) {
   const target = event.currentTarget;
   const action = target.dataset.action;
 
@@ -794,12 +906,12 @@ function onAction(event) {
     return;
   }
 
-  if ((action === "use-custom-problem" || action === "save-custom-problem") && !customProblemIsReady()) {
+  if ((action === "use-custom-problem" || action === "save-custom-problem" || action === "save-custom-problem-as-new") && !customProblemIsReady()) {
     alert("문제 제목과 받쓰판 문장을 입력해 주세요.");
     return;
   }
 
-  setState((draft) => {
+  const result = setState((draft) => {
     if (action === "set-mode") draft.mode = target.dataset.mode;
     if (action === "toggle-rules-edit") draft.rulesEditing = !draft.rulesEditing;
     if (action === "reset-rules" && confirm("룰 설명을 기본 내용으로 되돌릴까요?")) draft.rulesText = defaultRulesText;
@@ -828,8 +940,8 @@ function onAction(event) {
       draft.selectedProblemId = CUSTOM_PROBLEM_ID;
       clearReveals(draft);
     }
-    if (action === "save-custom-problem") {
-      const savedProblem = savedProblemFromCustom(draft);
+    if (action === "save-custom-problem" || action === "save-custom-problem-as-new") {
+      const savedProblem = savedProblemFromCustom(draft, { forceNew: action === "save-custom-problem-as-new" });
       const index = draft.savedProblems.findIndex((problem) => problem.id === savedProblem.id);
       if (index >= 0) draft.savedProblems[index] = savedProblem;
       else draft.savedProblems.unshift(savedProblem);
@@ -837,6 +949,7 @@ function onAction(event) {
       draft.selectedSavedProblemId = savedProblem.id;
       draft.selectedProblemId = CUSTOM_PROBLEM_ID;
       clearReveals(draft);
+      return { type: "save-audio", problem: savedProblem };
     }
     if (action === "load-saved-problem") {
       const savedProblem = selectedSavedProblem();
@@ -856,15 +969,18 @@ function onAction(event) {
       if (draft.selectedProblemId === savedProblem.id) draft.selectedProblemId = draft.customProblem.title.trim() && draft.customProblem.lyrics.trim() ? CUSTOM_PROBLEM_ID : "";
       if (isEditingDeletedProblem && draft.selectedProblemId === CUSTOM_PROBLEM_ID) draft.selectedProblemId = "";
       clearReveals(draft);
+      return { type: "delete-audio", id: savedProblem.id };
     }
     if (action === "clear-custom-problem") {
       draft.customProblem = clone(defaultState.customProblem);
       if (draft.selectedProblemId === CUSTOM_PROBLEM_ID) draft.selectedProblemId = problemLibrary[0]?.id || "";
       clearReveals(draft);
+      return { type: "delete-audio", id: CUSTOM_AUDIO_KEY };
     }
     if (action === "clear-custom-audio") {
       draft.customProblem.audioName = "";
       draft.customProblem.audioDataUrl = "";
+      return { type: "delete-audio", id: draft.customProblem.savedId || CUSTOM_AUDIO_KEY };
     }
     if (action === "toggle-timer") draft.timer.running = !draft.timer.running;
     if (action === "reset-timer") {
@@ -880,8 +996,20 @@ function onAction(event) {
     if (action === "reset-all" && confirm("수업 정보와 진행 상태를 기본값으로 되돌릴까요?")) {
       Object.assign(draft, clone(defaultState));
       draft.selectedProblemId = problemLibrary[0]?.id || "";
+      return { type: "clear-audio" };
     }
   });
+
+  if (result?.type === "save-audio") {
+    await saveAudioRecord(result.problem.id, result.problem.audioName, result.problem.audioDataUrl);
+    render();
+  }
+  if (result?.type === "delete-audio") {
+    await deleteAudioRecord(result.id);
+  }
+  if (result?.type === "clear-audio") {
+    await clearAudioStore();
+  }
 }
 
 function onProblemSelect(event) {
@@ -917,10 +1045,11 @@ function onCustomAudioFile(event) {
   const file = event.currentTarget.files?.[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.addEventListener("load", () => {
+  reader.addEventListener("load", async () => {
     state.customProblem.audioName = file.name;
     state.customProblem.audioDataUrl = String(reader.result || "");
     saveState();
+    await saveAudioRecord(state.customProblem.savedId || CUSTOM_AUDIO_KEY, state.customProblem.audioName, state.customProblem.audioDataUrl);
     render();
   });
   reader.readAsDataURL(file);
@@ -966,5 +1095,10 @@ function syncTimer() {
   }, 1000);
 }
 
-render();
-loadProblemLibrary();
+async function startApp() {
+  await hydrateStateAudio();
+  render();
+  loadProblemLibrary();
+}
+
+startApp();
