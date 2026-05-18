@@ -61,6 +61,10 @@ let problemLibrary = [];
 let problemLibraryStatus = "loading";
 let problemLibraryError = "";
 let storageWarning = "";
+let customMediaDuration = null;
+let customMediaDurationSource = "";
+let customMediaDurationProbeId = 0;
+let youtubeApiPromise = null;
 
 const defaultState = {
   mode: "make",
@@ -87,6 +91,7 @@ const defaultState = {
     timeRange: "",
     lyrics: "",
     problemUrl: "",
+    sourceType: "file",
     audioName: "",
     audioDataUrl: "",
   },
@@ -169,6 +174,7 @@ function normalizeProblem(problem, index) {
 }
 
 function normalizeCustomProblem(problem) {
+  const sourceType = problem.sourceType === "link" || problem.sourceType === "file" ? problem.sourceType : problem.problemUrl ? "link" : "file";
   return {
     id: CUSTOM_PROBLEM_ID,
     savedId: String(problem.savedId || ""),
@@ -177,6 +183,7 @@ function normalizeCustomProblem(problem) {
     timeRange: String(problem.timeRange || ""),
     lyrics: String(problem.lyrics || ""),
     problemUrl: String(problem.problemUrl || ""),
+    sourceType,
     audioName: String(problem.audioName || ""),
     audioDataUrl: String(problem.audioDataUrl || ""),
   };
@@ -350,6 +357,25 @@ function makerPreviewProblem() {
   return customProblemHasDraft() ? customProblem() : currentProblem();
 }
 
+function customProblemMediaSource() {
+  if (state.customProblem.sourceType === "link") return state.customProblem.problemUrl.trim();
+  return state.customProblem.audioDataUrl;
+}
+
+function mediaRangeValues(timeRange, duration = customMediaDuration) {
+  const { start, end } = parseTimeRange(timeRange);
+  const hasDuration = Boolean(duration);
+  const max = hasDuration ? Math.max(1, Math.round(duration)) : Math.max(1, start ?? 0, end ?? 0);
+  const rangeStart = hasDuration ? Math.min(start ?? 0, max) : start ?? 0;
+  const rangeEnd = hasDuration ? Math.min(end ?? max, max) : end ?? max;
+  return {
+    start: Math.min(rangeStart, rangeEnd),
+    end: Math.max(rangeStart, rangeEnd),
+    max,
+    hasDuration,
+  };
+}
+
 function selectedSavedProblem() {
   return state.savedProblems.find((problem) => problem.id === state.selectedSavedProblemId) || state.savedProblems[0] || null;
 }
@@ -395,6 +421,25 @@ function formatTime(totalSeconds) {
   return `${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`;
 }
 
+function formatTimestamp(totalSeconds) {
+  const seconds = Math.max(0, Math.round(Number(totalSeconds) || 0));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  if (hours > 0) return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+  return `${String(minutes).padStart(2, "0")}:${String(rest).padStart(2, "0")}`;
+}
+
+function formatDurationLabel(totalSeconds) {
+  const seconds = Math.max(0, Math.round(Number(totalSeconds) || 0));
+  const hours = Math.floor(seconds / 3600);
+  const minutes = Math.floor((seconds % 3600) / 60);
+  const rest = seconds % 60;
+  if (hours > 0) return `총 ${hours}시간 ${minutes}분 ${rest}초`;
+  if (minutes > 0) return `총 ${minutes}분 ${rest}초`;
+  return `총 ${rest}초`;
+}
+
 function parseTimestamp(value) {
   const parts = String(value || "").trim().split(":").map(Number);
   if (!parts.length || parts.some((part) => Number.isNaN(part))) return null;
@@ -410,12 +455,20 @@ function parseTimeRange(value) {
   return { start, end };
 }
 
-function youtubeEmbedUrl(url, timeRange) {
+function formatTimeRange(start, end) {
+  return `${formatTimestamp(start)} - ${formatTimestamp(end)}`;
+}
+
+function youtubeVideoId(url) {
   const value = String(url || "");
   const watchMatch = value.match(/[?&]v=([^&]+)/);
   const shortMatch = value.match(/youtu\.be\/([^?&]+)/);
   const embedMatch = value.match(/embed\/([^?&]+)/);
-  const id = watchMatch?.[1] || shortMatch?.[1] || embedMatch?.[1];
+  return watchMatch?.[1] || shortMatch?.[1] || embedMatch?.[1] || "";
+}
+
+function youtubeEmbedUrl(url, timeRange) {
+  const id = youtubeVideoId(url);
   if (!id) return "";
 
   const { start, end } = parseTimeRange(timeRange);
@@ -423,6 +476,33 @@ function youtubeEmbedUrl(url, timeRange) {
   if (start !== null) params.set("start", String(start));
   if (end !== null && (start === null || end > start)) params.set("end", String(end));
   return `https://www.youtube.com/embed/${id}?${params.toString()}`;
+}
+
+function youtubeThumbnailUrl(url) {
+  const id = youtubeVideoId(url);
+  return id ? `https://img.youtube.com/vi/${encodeURIComponent(id)}/hqdefault.jpg` : "";
+}
+
+function renderYoutubeLinkPreview(url) {
+  const thumbnailUrl = youtubeThumbnailUrl(url);
+  if (!thumbnailUrl) return `<span class="field__helper">YouTube 또는 직접 미디어 링크</span>`;
+  return `
+    <span class="youtube-link-preview">
+      <img src="${escapeHtml(thumbnailUrl)}" alt="" loading="lazy" />
+      <span>
+        <strong>YouTube 영상</strong>
+        <small>링크로 선택됨</small>
+      </span>
+    </span>
+  `;
+}
+
+function audioRangeAttributes(timeRange) {
+  const { start, end } = parseTimeRange(timeRange);
+  const attrs = [];
+  if (start !== null) attrs.push(`data-audio-start="${start}"`);
+  if (end !== null && (start === null || end > start)) attrs.push(`data-audio-end="${end}"`);
+  return attrs.join(" ");
 }
 
 function escapeHtml(value) {
@@ -507,10 +587,11 @@ function renderAppBar() {
   return `
     <header class="app-bar">
       <div class="app-brand">
-        <span class="section-badge">WOW</span>
+        <span class="brand-logo" aria-label="놀라운 수요일">
+          <img src="./assets/favicon.svg" alt="" />
+        </span>
         <div>
           <h1>${escapeHtml(state.lesson.title)}</h1>
-          <p>${escapeHtml(state.lesson.unit)} · ${escapeHtml(problem?.title || "문제 미선택")}</p>
         </div>
         <div class="mode-tabs" role="tablist" aria-label="작업 모드">
           ${phaseLabels
@@ -600,6 +681,11 @@ function renderMaker() {
   const problem = currentProblem();
   const previewProblem = makerPreviewProblem();
   const isEditingSavedProblem = Boolean(state.customProblem.savedId && state.savedProblems.some((problem) => problem.id === state.customProblem.savedId));
+  const sourceType = state.customProblem.sourceType === "link" ? "link" : "file";
+  const range = mediaRangeValues(state.customProblem.timeRange);
+  const rangeDisabled = range.hasDuration ? "" : "disabled";
+  const rangeStartPercent = (range.start / range.max) * 100;
+  const rangeEndPercent = (range.end / range.max) * 100;
   return `
     <main class="maker-layout">
       <section class="control-stack">
@@ -618,20 +704,62 @@ function renderMaker() {
               <span class="field__label">문제 제목</span>
               <input class="field__input" data-custom-problem-field="title" value="${escapeHtml(state.customProblem.title)}" placeholder="예: 단원명 · 핵심 개념" />
             </label>
-            <label class="field">
-              <span class="field__label">노래 구간</span>
-              <input class="field__input" data-custom-problem-field="timeRange" value="${escapeHtml(state.customProblem.timeRange)}" placeholder="예: 00:32 - 00:48" />
-            </label>
-            <label class="field">
-              <span class="field__label">문제 링크</span>
-              <input class="field__input" data-custom-problem-field="problemUrl" value="${escapeHtml(state.customProblem.problemUrl)}" placeholder="예: https://youtu.be/..." />
-            </label>
-            <label class="field editor-grid__wide">
-              <span class="field__label">음원 파일</span>
-              <input class="field__input file-input" data-custom-audio-file type="file" accept="audio/*" />
-              ${state.customProblem.audioName ? `<span class="field__helper">선택됨: ${escapeHtml(state.customProblem.audioName)}</span>` : ""}
-              ${storageWarning ? `<span class="field__helper field__helper--warning">${escapeHtml(storageWarning)}</span>` : ""}
-            </label>
+            <div class="field editor-grid__wide media-source-field">
+              <div class="media-source-field__heading">
+                <span class="field__label">문제 소스</span>
+                <div class="media-source-tabs" aria-label="문제 소스 선택">
+                  <button class="media-source-tab ${sourceType === "file" ? "is-active" : ""}" type="button" data-action="set-source-type" data-source-type="file">파일로 첨부</button>
+                  <button class="media-source-tab ${sourceType === "link" ? "is-active" : ""}" type="button" data-action="set-source-type" data-source-type="link">링크로 첨부</button>
+                </div>
+              </div>
+              <div class="media-source-panel">
+                ${
+                  sourceType === "link"
+                    ? `<label class="field">
+                        <span class="field__label">문제 링크</span>
+                        <input class="field__input media-link-input" data-custom-problem-field="problemUrl" value="${escapeHtml(state.customProblem.problemUrl)}" placeholder="예: https://youtu.be/..." />
+                        <span data-youtube-link-preview>${renderYoutubeLinkPreview(state.customProblem.problemUrl)}</span>
+                      </label>`
+                    : `<div class="field">
+                        <span class="field__label">음원 파일</span>
+                        <input id="custom-audio-file" class="file-input" data-custom-audio-file type="file" accept="audio/*,video/*" />
+                        <label class="audio-file-picker ${state.customProblem.audioName ? "is-selected" : ""}" for="custom-audio-file">
+                          <span class="audio-file-picker__icon" aria-hidden="true">♪</span>
+                          <span class="audio-file-picker__body">
+                            <span class="audio-file-picker__title">${escapeHtml(state.customProblem.audioName || "음원 파일 선택")}</span>
+                            <span class="audio-file-picker__meta">${state.customProblem.audioName ? "파일 변경" : "MP3, MP4, WAV"}</span>
+                          </span>
+                        </label>
+                        ${storageWarning ? `<span class="field__helper field__helper--warning">${escapeHtml(storageWarning)}</span>` : ""}
+                      </div>`
+                }
+              </div>
+            </div>
+            <div class="field editor-grid__wide media-range-field">
+              <div class="media-range-field__heading">
+                <span class="field__label">노래 구간 정하기</span>
+                <span class="field__helper" data-media-duration-label>${range.hasDuration ? formatDurationLabel(range.max) : "미디어 길이 인식 대기"}</span>
+              </div>
+              <input type="hidden" data-custom-problem-field="timeRange" value="${escapeHtml(state.customProblem.timeRange)}" />
+              <div class="media-range-control" data-media-range-control style="--range-start:${rangeStartPercent}%; --range-end:${rangeEndPercent}%;">
+                <div class="media-range-control__header">
+                  <span data-range-start-label>${formatTimestamp(range.start)}</span>
+                  <span data-range-end-label>${formatTimestamp(range.end)}</span>
+                </div>
+                <div class="media-range-control__timeline">
+                  <div class="media-range-control__track"></div>
+                  <div class="media-range-control__selection"></div>
+                  <input class="media-range-control__slider media-range-control__slider--start" data-time-range-bound="start" aria-label="구간 시작" type="range" min="0" max="${range.max}" step="1" value="${range.start}" ${rangeDisabled} />
+                  <input class="media-range-control__slider media-range-control__slider--end" data-time-range-bound="end" aria-label="구간 끝" type="range" min="0" max="${range.max}" step="1" value="${range.end}" ${rangeDisabled} />
+                </div>
+                <div class="media-range-control__summary" data-range-summary>선택 구간 ${formatTimestamp(range.end - range.start)}</div>
+                <div class="media-range-control__direct">
+                  <input class="media-range-control__time-input" data-time-direct="start" aria-label="시작 시간 직접 입력" value="${formatTimestamp(range.start)}" />
+                  <span aria-hidden="true">-</span>
+                  <input class="media-range-control__time-input" data-time-direct="end" aria-label="끝 시간 직접 입력" value="${formatTimestamp(range.end)}" />
+                </div>
+              </div>
+            </div>
             <label class="field editor-grid__wide">
               <span class="field__label">받쓰판 문장</span>
               <textarea class="field__input field__textarea" data-custom-problem-field="lyrics" placeholder="받쓰판에 넣을 문장을 입력하세요.">${escapeHtml(state.customProblem.lyrics)}</textarea>
@@ -843,14 +971,15 @@ function renderRunner() {
 }
 
 function renderProblemMedia(problem) {
-  if (problem?.audioDataUrl) {
+  if (problem?.sourceType !== "link" && problem?.audioDataUrl) {
+    const rangeAttrs = audioRangeAttributes(problem.timeRange);
     return `
-      <audio class="audio-player" controls src="${escapeHtml(problem.audioDataUrl)}"></audio>
+      <audio class="audio-player" controls src="${escapeHtml(problem.audioDataUrl)}" data-ranged-audio ${rangeAttrs}></audio>
       <span class="field__helper">${escapeHtml(problem.audioName || "업로드한 음원")}</span>
     `;
   }
 
-  const mediaUrl = problem?.problemUrl || state.lesson.songUrl;
+  const mediaUrl = problem?.sourceType === "file" ? "" : problem?.problemUrl || state.lesson.songUrl;
   const embedUrl = youtubeEmbedUrl(mediaUrl, problem?.timeRange);
   if (embedUrl) {
     return `
@@ -883,6 +1012,13 @@ function bindEvents() {
   document.querySelectorAll("[data-custom-problem-field]").forEach((element) => {
     element.addEventListener("input", onCustomProblemInput);
   });
+  document.querySelectorAll("[data-time-range-bound]").forEach((element) => {
+    element.addEventListener("input", onTimeRangeSliderInput);
+  });
+  document.querySelectorAll("[data-time-direct]").forEach((element) => {
+    element.addEventListener("input", onTimeDirectInput);
+    element.addEventListener("change", onTimeDirectInput);
+  });
   document.querySelectorAll("[data-custom-audio-file]").forEach((element) => {
     element.addEventListener("change", onCustomAudioFile);
   });
@@ -895,6 +1031,40 @@ function bindEvents() {
   document.querySelectorAll("[data-saved-problem-select]").forEach((element) => {
     element.addEventListener("change", onSavedProblemSelect);
   });
+  bindRangedAudioPlayers();
+  syncCustomMediaDuration();
+}
+
+function bindRangedAudioPlayers() {
+  document.querySelectorAll("[data-ranged-audio]").forEach((audio) => {
+    const start = readAudioTime(audio.dataset.audioStart);
+    const end = readAudioTime(audio.dataset.audioEnd);
+    if (start === null && end === null) return;
+
+    const seekToStart = () => {
+      if (start === null) return;
+      const targetTime = Number.isFinite(audio.duration) ? Math.min(start, audio.duration) : start;
+      if (Math.abs(audio.currentTime - targetTime) > 0.25) audio.currentTime = targetTime;
+    };
+
+    audio.addEventListener("loadedmetadata", seekToStart);
+    audio.addEventListener("play", () => {
+      if (start !== null && audio.currentTime < start - 0.25) seekToStart();
+      if (start !== null && end !== null && audio.currentTime >= end - 0.1) seekToStart();
+      if (start === null && end !== null && audio.currentTime >= end - 0.1) audio.currentTime = 0;
+    });
+    audio.addEventListener("timeupdate", () => {
+      if (end === null || audio.currentTime < end) return;
+      audio.pause();
+      audio.currentTime = end;
+    });
+  });
+}
+
+function readAudioTime(value) {
+  if (value === undefined) return null;
+  const seconds = Number(value);
+  return Number.isFinite(seconds) ? seconds : null;
 }
 
 async function onAction(event) {
@@ -913,6 +1083,9 @@ async function onAction(event) {
 
   const result = setState((draft) => {
     if (action === "set-mode") draft.mode = target.dataset.mode;
+    if (action === "set-source-type") {
+      draft.customProblem.sourceType = target.dataset.sourceType === "link" ? "link" : "file";
+    }
     if (action === "toggle-rules-edit") draft.rulesEditing = !draft.rulesEditing;
     if (action === "reset-rules" && confirm("룰 설명을 기본 내용으로 되돌릴까요?")) draft.rulesText = defaultRulesText;
     if (action === "toggle-reveal") {
@@ -1027,8 +1200,217 @@ function onSavedProblemSelect(event) {
 
 function onCustomProblemInput(event) {
   state.customProblem[event.currentTarget.dataset.customProblemField] = event.currentTarget.value;
+  if (event.currentTarget.dataset.customProblemField === "problemUrl" && event.currentTarget.value.trim()) {
+    state.customProblem.sourceType = "link";
+  }
   saveState();
+  if (event.currentTarget.dataset.customProblemField === "problemUrl") {
+    updateYouTubeLinkPreview();
+    syncCustomMediaDuration();
+  }
+  if (event.currentTarget.dataset.customProblemField === "timeRange") updateMediaRangeControls();
   refreshMakerPreview();
+}
+
+function updateYouTubeLinkPreview() {
+  const preview = document.querySelector("[data-youtube-link-preview]");
+  if (!preview) return;
+  preview.innerHTML = renderYoutubeLinkPreview(state.customProblem.problemUrl);
+}
+
+function onTimeRangeSliderInput(event) {
+  const startInput = document.querySelector('[data-time-range-bound="start"]');
+  const endInput = document.querySelector('[data-time-range-bound="end"]');
+  if (!startInput || !endInput) return;
+
+  let start = Number(startInput.value) || 0;
+  let end = Number(endInput.value) || 0;
+  if (event.currentTarget.dataset.timeRangeBound === "start" && start > end) end = start;
+  if (event.currentTarget.dataset.timeRangeBound === "end" && end < start) start = end;
+
+  state.customProblem.timeRange = formatTimeRange(start, end);
+  saveState();
+  updateMediaRangeControls(start, end);
+  refreshMakerPreview();
+}
+
+function onTimeDirectInput(event) {
+  const range = mediaRangeValues(state.customProblem.timeRange);
+  const startInput = document.querySelector('[data-time-direct="start"]');
+  const endInput = document.querySelector('[data-time-direct="end"]');
+  if (!startInput || !endInput) return;
+
+  let start = parseTimestamp(startInput.value);
+  let end = parseTimestamp(endInput.value);
+  start = start === null ? range.start : start;
+  end = end === null ? range.end : end;
+  if (range.hasDuration) {
+    start = Math.min(start, range.max);
+    end = Math.min(end, range.max);
+  }
+  if (event.currentTarget.dataset.timeDirect === "start" && start > end) end = start;
+  if (event.currentTarget.dataset.timeDirect === "end" && end < start) start = end;
+
+  state.customProblem.timeRange = formatTimeRange(start, end);
+  saveState();
+  updateMediaRangeControls(start, end);
+  refreshMakerPreview();
+}
+
+function updateMediaRangeControls(nextStart, nextEnd) {
+  const range = mediaRangeValues(
+    nextStart !== undefined && nextEnd !== undefined ? formatTimeRange(nextStart, nextEnd) : state.customProblem.timeRange
+  );
+  const startInput = document.querySelector('[data-time-range-bound="start"]');
+  const endInput = document.querySelector('[data-time-range-bound="end"]');
+  const textInput = document.querySelector('[data-custom-problem-field="timeRange"]');
+  const directStartInput = document.querySelector('[data-time-direct="start"]');
+  const directEndInput = document.querySelector('[data-time-direct="end"]');
+  const rangeControl = document.querySelector("[data-media-range-control]");
+  const startLabel = document.querySelector("[data-range-start-label]");
+  const endLabel = document.querySelector("[data-range-end-label]");
+  const durationLabel = document.querySelector("[data-media-duration-label]");
+  const summary = document.querySelector("[data-range-summary]");
+  const startPercent = (range.start / range.max) * 100;
+  const endPercent = (range.end / range.max) * 100;
+
+  if (textInput) textInput.value = state.customProblem.timeRange;
+  if (durationLabel) durationLabel.textContent = range.hasDuration ? formatDurationLabel(range.max) : "미디어 길이 인식 대기";
+  [startInput, endInput].filter(Boolean).forEach((input) => {
+    input.max = String(range.max);
+    input.disabled = !range.hasDuration;
+  });
+  if (startInput) startInput.value = String(range.start);
+  if (endInput) endInput.value = String(range.end);
+  if (startLabel) startLabel.textContent = formatTimestamp(range.start);
+  if (endLabel) endLabel.textContent = formatTimestamp(range.end);
+  if (directStartInput) directStartInput.value = formatTimestamp(range.start);
+  if (directEndInput) directEndInput.value = formatTimestamp(range.end);
+  if (summary) summary.textContent = `선택 구간 ${formatTimestamp(range.end - range.start)}`;
+  if (rangeControl) {
+    rangeControl.style.setProperty("--range-start", `${startPercent}%`);
+    rangeControl.style.setProperty("--range-end", `${endPercent}%`);
+  }
+}
+
+function applyCustomMediaDuration(duration) {
+  if (!Number.isFinite(duration) || duration <= 0) return;
+  customMediaDuration = Math.round(duration);
+  const { start, end } = parseTimeRange(state.customProblem.timeRange);
+  if (start === null && end === null) {
+    state.customProblem.timeRange = formatTimeRange(0, customMediaDuration);
+    saveState();
+  } else {
+    const range = mediaRangeValues(state.customProblem.timeRange, customMediaDuration);
+    const clampedRange = formatTimeRange(range.start, range.end);
+    if (clampedRange !== state.customProblem.timeRange) {
+      state.customProblem.timeRange = clampedRange;
+      saveState();
+    }
+  }
+  updateMediaRangeControls();
+}
+
+function syncCustomMediaDuration() {
+  const source = customProblemMediaSource();
+  if (source === customMediaDurationSource) return;
+
+  customMediaDurationSource = source;
+  customMediaDuration = null;
+  updateMediaRangeControls();
+  const probeId = ++customMediaDurationProbeId;
+  if (!source) return;
+
+  const youtubeId = youtubeVideoId(source);
+  if (youtubeId) {
+    syncYouTubeDuration(youtubeId, probeId);
+    return;
+  }
+
+  const media = document.createElement("video");
+  media.preload = "metadata";
+  media.muted = true;
+  media.addEventListener("loadedmetadata", () => {
+    if (probeId !== customMediaDurationProbeId) return;
+    applyCustomMediaDuration(media.duration);
+  });
+  media.addEventListener("error", () => {
+    if (probeId !== customMediaDurationProbeId) return;
+    customMediaDuration = null;
+    updateMediaRangeControls();
+  });
+  media.src = source;
+}
+
+function loadYouTubeApi() {
+  if (window.YT?.Player) return Promise.resolve(window.YT);
+  if (youtubeApiPromise) return youtubeApiPromise;
+
+  youtubeApiPromise = new Promise((resolve, reject) => {
+    const previousReady = window.onYouTubeIframeAPIReady;
+    window.onYouTubeIframeAPIReady = () => {
+      if (typeof previousReady === "function") previousReady();
+      resolve(window.YT);
+    };
+
+    if (!document.querySelector('script[src="https://www.youtube.com/iframe_api"]')) {
+      const script = document.createElement("script");
+      script.src = "https://www.youtube.com/iframe_api";
+      script.async = true;
+      script.onerror = () => reject(new Error("YouTube API를 불러오지 못했습니다."));
+      document.head.appendChild(script);
+    }
+  });
+
+  return youtubeApiPromise;
+}
+
+async function syncYouTubeDuration(videoId, probeId) {
+  try {
+    const yt = await loadYouTubeApi();
+    if (probeId !== customMediaDurationProbeId) return;
+
+    const mount = document.createElement("div");
+    mount.className = "youtube-duration-probe";
+    document.body.appendChild(mount);
+
+    let attempts = 0;
+    let intervalId = null;
+    const cleanup = (player) => {
+      if (intervalId) window.clearInterval(intervalId);
+      player.destroy();
+      mount.remove();
+    };
+    const player = new yt.Player(mount, {
+      videoId,
+      width: "1",
+      height: "1",
+      playerVars: { playsinline: 1 },
+      events: {
+        onReady: () => {
+          intervalId = window.setInterval(() => {
+            attempts += 1;
+            if (probeId !== customMediaDurationProbeId) {
+              cleanup(player);
+              return;
+            }
+
+            const duration = player.getDuration();
+            if (Number.isFinite(duration) && duration > 0) {
+              applyCustomMediaDuration(duration);
+              cleanup(player);
+            } else if (attempts > 20) {
+              cleanup(player);
+            }
+          }, 250);
+        },
+      },
+    });
+  } catch {
+    if (probeId !== customMediaDurationProbeId) return;
+    customMediaDuration = null;
+    updateMediaRangeControls();
+  }
 }
 
 function refreshMakerPreview() {
@@ -1048,6 +1430,7 @@ function onCustomAudioFile(event) {
   reader.addEventListener("load", async () => {
     state.customProblem.audioName = file.name;
     state.customProblem.audioDataUrl = String(reader.result || "");
+    state.customProblem.sourceType = "file";
     saveState();
     await saveAudioRecord(state.customProblem.savedId || CUSTOM_AUDIO_KEY, state.customProblem.audioName, state.customProblem.audioDataUrl);
     render();
