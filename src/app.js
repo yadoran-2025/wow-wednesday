@@ -89,6 +89,9 @@ const defaultState = {
     category: "",
     title: "",
     timeRange: "",
+    hasProblemRange: false,
+    problemRange: "",
+    useCountdown: false,
     lyrics: "",
     problemUrl: "",
     sourceType: "file",
@@ -106,6 +109,13 @@ const defaultState = {
 
 let state = loadState();
 let timerId = null;
+let runnerCountdownState = {
+  active: false,
+  completed: false,
+  timerIds: [],
+};
+let youtubeRunnerPlayer = null;
+let youtubePollerId = null;
 
 function clone(value) {
   return JSON.parse(JSON.stringify(value));
@@ -169,6 +179,9 @@ function normalizeProblem(problem, index) {
     category: String(problem.category || "분류 없음"),
     title: String(problem.title || `문제 ${index + 1}`),
     timeRange: String(problem.timeRange || ""),
+    hasProblemRange: Boolean(problem.hasProblemRange),
+    problemRange: String(problem.problemRange || ""),
+    useCountdown: Boolean(problem.useCountdown),
     lyrics: String(problem.lyrics || ""),
   };
 }
@@ -181,6 +194,9 @@ function normalizeCustomProblem(problem) {
     category: String(problem.category || ""),
     title: String(problem.title || ""),
     timeRange: String(problem.timeRange || ""),
+    hasProblemRange: Boolean(problem.hasProblemRange),
+    problemRange: String(problem.problemRange || ""),
+    useCountdown: Boolean(problem.useCountdown),
     lyrics: String(problem.lyrics || ""),
     problemUrl: String(problem.problemUrl || ""),
     sourceType,
@@ -376,6 +392,22 @@ function mediaRangeValues(timeRange, duration = customMediaDuration) {
   };
 }
 
+function problemRangeValues(problemRangeStr, songRangeStr, duration = customMediaDuration) {
+  const song = mediaRangeValues(songRangeStr, duration);
+  const { start: pStart, end: pEnd } = parseTimeRange(problemRangeStr);
+
+  const clampedStart = Math.max(song.start, Math.min(song.end, pStart ?? song.start));
+  const clampedEnd = Math.max(song.start, Math.min(song.end, pEnd ?? song.end));
+
+  return {
+    start: Math.min(clampedStart, clampedEnd),
+    end: Math.max(clampedStart, clampedEnd),
+    min: song.start,
+    max: song.end,
+    hasDuration: song.hasDuration,
+  };
+}
+
 function selectedSavedProblem() {
   return state.savedProblems.find((problem) => problem.id === state.selectedSavedProblemId) || state.savedProblems[0] || null;
 }
@@ -413,6 +445,30 @@ function makeSpacingHint(lyrics) {
 
 function makeFlashText(lyrics) {
   return lyrics || "가사를 입력하면 여기에 플래시 힌트가 표시됩니다.";
+}
+
+function playCountdownBeep(isStartBeep = false) {
+  try {
+    const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+
+    // isStartBeep가 true이면 더 높고 긴 비프음(시작 신호), false이면 카운트다운용 중저음 비프음
+    const frequency = isStartBeep ? 1200 : 800;
+    const duration = isStartBeep ? 0.7 : 0.18;
+
+    osc.frequency.setValueAtTime(frequency, audioCtx.currentTime);
+    gain.gain.setValueAtTime(0.12, audioCtx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+
+    osc.start(audioCtx.currentTime);
+    osc.stop(audioCtx.currentTime + duration);
+  } catch (error) {
+    console.error("비프음을 재생하지 못했습니다:", error);
+  }
 }
 
 function formatTime(totalSeconds) {
@@ -686,6 +742,12 @@ function renderMaker() {
   const rangeDisabled = range.hasDuration ? "" : "disabled";
   const rangeStartPercent = (range.start / range.max) * 100;
   const rangeEndPercent = (range.end / range.max) * 100;
+
+  const problemRange = problemRangeValues(state.customProblem.problemRange, state.customProblem.timeRange, customMediaDuration);
+  const pRangeDisabled = range.hasDuration ? "" : "disabled";
+  const pDenom = Math.max(1, problemRange.max - problemRange.min);
+  const pRangeStartPercent = ((problemRange.start - problemRange.min) / pDenom) * 100;
+  const pRangeEndPercent = ((problemRange.end - problemRange.min) / pDenom) * 100;
   return `
     <main class="maker-layout">
       <section class="control-stack">
@@ -724,11 +786,11 @@ function renderMaker() {
                         <span class="field__label">음원 파일</span>
                         <input id="custom-audio-file" class="file-input" data-custom-audio-file type="file" accept="audio/*,video/*" />
                         <label class="audio-file-picker ${state.customProblem.audioName ? "is-selected" : ""}" for="custom-audio-file">
-                          <span class="audio-file-picker__icon" aria-hidden="true">♪</span>
-                          <span class="audio-file-picker__body">
-                            <span class="audio-file-picker__title">${escapeHtml(state.customProblem.audioName || "음원 파일 선택")}</span>
-                            <span class="audio-file-picker__meta">${state.customProblem.audioName ? "파일 변경" : "MP3, MP4, WAV"}</span>
-                          </span>
+                           <span class="audio-file-picker__icon" aria-hidden="true">♪</span>
+                           <span class="audio-file-picker__body">
+                             <span class="audio-file-picker__title">${escapeHtml(state.customProblem.audioName || "음원 파일 선택")}</span>
+                             <span class="audio-file-picker__meta">${state.customProblem.audioName ? "파일 변경" : "MP3, MP4, WAV"}</span>
+                           </span>
                         </label>
                         ${storageWarning ? `<span class="field__helper field__helper--warning">${escapeHtml(storageWarning)}</span>` : ""}
                       </div>`
@@ -743,8 +805,8 @@ function renderMaker() {
               <input type="hidden" data-custom-problem-field="timeRange" value="${escapeHtml(state.customProblem.timeRange)}" />
               <div class="media-range-control" data-media-range-control style="--range-start:${rangeStartPercent}%; --range-end:${rangeEndPercent}%;">
                 <div class="media-range-control__header">
-                  <span data-range-start-label>${formatTimestamp(range.start)}</span>
-                  <span data-range-end-label>${formatTimestamp(range.end)}</span>
+                  <span data-range-start-label>${formatTimestamp(0)}</span>
+                  <span data-range-end-label>${formatTimestamp(range.max)}</span>
                 </div>
                 <div class="media-range-control__timeline">
                   <div class="media-range-control__track"></div>
@@ -752,7 +814,7 @@ function renderMaker() {
                   <input class="media-range-control__slider media-range-control__slider--start" data-time-range-bound="start" aria-label="구간 시작" type="range" min="0" max="${range.max}" step="1" value="${range.start}" ${rangeDisabled} />
                   <input class="media-range-control__slider media-range-control__slider--end" data-time-range-bound="end" aria-label="구간 끝" type="range" min="0" max="${range.max}" step="1" value="${range.end}" ${rangeDisabled} />
                 </div>
-                <div class="media-range-control__summary" data-range-summary>선택 구간 ${formatTimestamp(range.end - range.start)}</div>
+                <div class="media-range-control__summary" data-range-summary>선택 구간: ${formatTimestamp(range.start)} - ${formatTimestamp(range.end)} (총 ${formatTimestamp(range.end - range.start)})</div>
                 <div class="media-range-control__direct">
                   <input class="media-range-control__time-input" data-time-direct="start" aria-label="시작 시간 직접 입력" value="${formatTimestamp(range.start)}" />
                   <span aria-hidden="true">-</span>
@@ -760,6 +822,48 @@ function renderMaker() {
                 </div>
               </div>
             </div>
+
+            <div class="field editor-grid__wide problem-range-toggle-field">
+              <label class="checkbox-label">
+                <input type="checkbox" data-custom-problem-field="hasProblemRange" ${state.customProblem.hasProblemRange ? "checked" : ""} />
+                <span>문제 구간 따로 설정하기 (받쓰 정답이 나오는 구간 지정)</span>
+              </label>
+            </div>
+
+            ${state.customProblem.hasProblemRange ? `
+              <div class="field editor-grid__wide media-range-field problem-range-field">
+                <div class="media-range-field__heading">
+                  <span class="field__label">문제 정답 구간 정하기 🎯</span>
+                  <span class="field__helper" data-problem-duration-label>${problemRange.hasDuration ? formatDurationLabel(problemRange.max - problemRange.min) : "미디어 길이 인식 대기"}</span>
+                </div>
+                <input type="hidden" data-custom-problem-field="problemRange" value="${escapeHtml(state.customProblem.problemRange || state.customProblem.timeRange)}" />
+                <div class="media-range-control media-range-control--problem" data-problem-range-control style="--range-start:${pRangeStartPercent}%; --range-end:${pRangeEndPercent}%;">
+                  <div class="media-range-control__header">
+                    <span data-problem-range-start-label>${formatTimestamp(problemRange.min)}</span>
+                    <span data-problem-range-end-label>${formatTimestamp(problemRange.max)}</span>
+                  </div>
+                  <div class="media-range-control__timeline">
+                    <div class="media-range-control__track"></div>
+                    <div class="media-range-control__selection"></div>
+                    <input class="media-range-control__slider media-range-control__slider--start" data-problem-time-range-bound="start" aria-label="문제 구간 시작" type="range" min="${problemRange.min}" max="${problemRange.max}" step="1" value="${problemRange.start}" ${pRangeDisabled} />
+                    <input class="media-range-control__slider media-range-control__slider--end" data-problem-time-range-bound="end" aria-label="문제 구간 끝" type="range" min="${problemRange.min}" max="${problemRange.max}" step="1" value="${problemRange.end}" ${pRangeDisabled} />
+                  </div>
+                  <div class="media-range-control__summary" data-problem-range-summary>선택 문제 구간: ${formatTimestamp(problemRange.start)} - ${formatTimestamp(problemRange.end)} (총 ${formatTimestamp(problemRange.end - problemRange.start)})</div>
+                  <div class="media-range-control__direct">
+                    <input class="media-range-control__time-input" data-problem-time-direct="start" aria-label="문제 시작 시간 직접 입력" value="${formatTimestamp(problemRange.start)}" />
+                    <span aria-hidden="true">-</span>
+                    <input class="media-range-control__time-input" data-problem-time-direct="end" aria-label="문제 끝 시간 직접 입력" value="${formatTimestamp(problemRange.end)}" />
+                  </div>
+                </div>
+              </div>
+              <div class="field editor-grid__wide countdown-toggle-field">
+                <label class="checkbox-label">
+                  <input type="checkbox" data-custom-problem-field="useCountdown" ${state.customProblem.useCountdown ? "checked" : ""} />
+                  <span>문제 시작 3초 전 카운트다운(삐-삐-삐-띵) 효과음 & 화면 연출 사용 ⏰</span>
+                </label>
+              </div>
+            ` : ""}
+
             <label class="field editor-grid__wide">
               <span class="field__label">받쓰판 문장</span>
               <textarea class="field__input field__textarea" data-custom-problem-field="lyrics" placeholder="받쓰판에 넣을 문장을 입력하세요.">${escapeHtml(state.customProblem.lyrics)}</textarea>
@@ -967,6 +1071,11 @@ function renderRunner() {
       </aside>
     </main>
     ${state.flashVisible ? `<div class="flash-overlay" role="dialog" aria-label="플래시 힌트"><p>${renderGeneratedText(makeFlashText(problem?.lyrics))}</p></div>` : ""}
+    <div class="countdown-overlay is-hidden" data-countdown-overlay>
+      <div class="countdown-circle">
+        <span class="countdown-number" data-countdown-text>3</span>
+      </div>
+    </div>
   `;
 }
 
@@ -983,7 +1092,7 @@ function renderProblemMedia(problem) {
   const embedUrl = youtubeEmbedUrl(mediaUrl, problem?.timeRange);
   if (embedUrl) {
     return `
-      <iframe src="${embedUrl}" title="수업 노래 영상" allowfullscreen></iframe>
+      <div id="youtube-runner-player" class="youtube-player-placeholder" data-youtube-url="${escapeHtml(mediaUrl)}" data-time-range="${escapeHtml(problem?.timeRange || "")}"></div>
       <a class="media-link" href="${escapeHtml(mediaUrl)}" target="_blank" rel="noreferrer">링크 열기</a>
     `;
   }
@@ -1019,6 +1128,13 @@ function bindEvents() {
     element.addEventListener("input", onTimeDirectInput);
     element.addEventListener("change", onTimeDirectInput);
   });
+  document.querySelectorAll("[data-problem-time-range-bound]").forEach((element) => {
+    element.addEventListener("input", onProblemTimeRangeSliderInput);
+  });
+  document.querySelectorAll("[data-problem-time-direct]").forEach((element) => {
+    element.addEventListener("input", onProblemTimeDirectInput);
+    element.addEventListener("change", onProblemTimeDirectInput);
+  });
   document.querySelectorAll("[data-custom-audio-file]").forEach((element) => {
     element.addEventListener("change", onCustomAudioFile);
   });
@@ -1033,12 +1149,22 @@ function bindEvents() {
   });
   bindRangedAudioPlayers();
   syncCustomMediaDuration();
+  initRunnerYouTubePlayer();
 }
 
 function bindRangedAudioPlayers() {
   document.querySelectorAll("[data-ranged-audio]").forEach((audio) => {
     const start = readAudioTime(audio.dataset.audioStart);
     const end = readAudioTime(audio.dataset.audioEnd);
+
+    // 카운트다운은 항상 timeupdate/seeked 이벤트 감지가 필요하므로 먼저 바인딩합니다.
+    audio.addEventListener("timeupdate", () => {
+      checkRunnerCountdown(audio.currentTime, "audio", audio);
+    });
+    audio.addEventListener("seeked", () => {
+      checkRunnerCountdown(audio.currentTime, "audio", audio);
+    });
+
     if (start === null && end === null) return;
 
     const seekToStart = () => {
@@ -1061,6 +1187,198 @@ function bindRangedAudioPlayers() {
   });
 }
 
+function cancelCountdownSequence() {
+  runnerCountdownState.timerIds.forEach((id) => clearTimeout(id));
+  runnerCountdownState.timerIds = [];
+  runnerCountdownState.active = false;
+  
+  const overlay = document.querySelector("[data-countdown-overlay]");
+  if (overlay) {
+    overlay.classList.add("is-hidden");
+  }
+}
+
+function pauseCountdownPlayer(playerType, playerObj) {
+  if (playerType === "audio") {
+    playerObj.pause();
+    return;
+  }
+
+  if (playerType === "youtube" && playerObj && typeof playerObj.pauseVideo === "function") {
+    playerObj.pauseVideo();
+  }
+}
+
+function runCountdownSequence(playerType, playerObj, problemStart) {
+  if (runnerCountdownState.active) return;
+  runnerCountdownState.active = true;
+  runnerCountdownState.completed = true;
+
+  const overlay = document.querySelector("[data-countdown-overlay]");
+  const textEl = document.querySelector("[data-countdown-text]");
+  if (!overlay || !textEl) {
+    runnerCountdownState.active = false;
+    return;
+  }
+
+  // 1. 카운트다운 동안 원곡은 완전히 멈춘 상태를 유지합니다.
+  pauseCountdownPlayer(playerType, playerObj);
+
+  overlay.classList.remove("is-hidden");
+
+  const steps = [
+    { text: "3", beep: false, delay: 0 },
+    { text: "2", beep: false, delay: 1000 },
+    { text: "1", beep: false, delay: 2000 },
+    { text: "시작", beep: true, delay: 3000 }
+  ];
+  const startMusicDelay = 500;
+
+  runnerCountdownState.timerIds = [];
+
+  steps.forEach((step) => {
+    const timerId = window.setTimeout(() => {
+      textEl.textContent = step.text;
+      triggerPulseAnimation(textEl, step.text);
+      pauseCountdownPlayer(playerType, playerObj);
+      playCountdownBeep(step.beep);
+
+      if (step.beep) {
+        const playTimerId = window.setTimeout(() => {
+          // 2. 시작 신호음이 살짝 남아있는 동안 노래 재생 재개 및 문제 시작 지점으로 이동
+          if (playerType === "audio") {
+            playerObj.currentTime = problemStart;
+            playerObj.play().catch((error) => {
+              console.error("오디오 재생을 시작하지 못했습니다:", error);
+            });
+          } else if (playerType === "youtube") {
+            if (playerObj && typeof playerObj.seekTo === "function" && typeof playerObj.playVideo === "function") {
+              playerObj.seekTo(problemStart, true);
+              playerObj.playVideo();
+            }
+          }
+        }, startMusicDelay);
+        runnerCountdownState.timerIds.push(playTimerId);
+
+        const hideTimerId = window.setTimeout(() => {
+          overlay.classList.add("is-hidden");
+          runnerCountdownState.active = false;
+        }, 1000);
+        runnerCountdownState.timerIds.push(hideTimerId);
+      }
+    }, step.delay);
+    
+    runnerCountdownState.timerIds.push(timerId);
+  });
+}
+
+function checkRunnerCountdown(currentTime, playerType, playerObj) {
+  const problem = currentProblem();
+  if (!problem || !problem.hasProblemRange || !problem.useCountdown) {
+    cancelCountdownSequence();
+    return;
+  }
+
+  const { start: problemStart } = parseTimeRange(problem.problemRange || problem.timeRange || "0");
+  if (problemStart === null) {
+    cancelCountdownSequence();
+    return;
+  }
+
+  if (currentTime < problemStart - 3.5) {
+    runnerCountdownState.completed = false;
+  }
+
+  const isPlaying = playerType === "audio"
+    ? !playerObj.paused
+    : (playerObj && typeof playerObj.getPlayerState === "function" && playerObj.getPlayerState() === 1);
+
+  if (isPlaying && !runnerCountdownState.active && !runnerCountdownState.completed) {
+    const triggerThreshold = problemStart - 3.0;
+    if (currentTime >= triggerThreshold && currentTime < problemStart) {
+      runCountdownSequence(playerType, playerObj, problemStart);
+    }
+  }
+}
+
+function triggerPulseAnimation(el, text) {
+  if (text === "시작") {
+    el.classList.add("is-start");
+  } else {
+    el.classList.remove("is-start");
+  }
+  if (el.dataset.lastText === text) return;
+  el.dataset.lastText = text;
+  el.classList.remove("pulse");
+  void el.offsetWidth; // Reflow to restart animation
+  el.classList.add("pulse");
+}
+
+function initRunnerYouTubePlayer() {
+  if (youtubePollerId) {
+    clearInterval(youtubePollerId);
+    youtubePollerId = null;
+  }
+  if (youtubeRunnerPlayer) {
+    try {
+      youtubeRunnerPlayer.destroy();
+    } catch (e) {
+      console.warn("Error destroying YT player:", e);
+    }
+    youtubeRunnerPlayer = null;
+  }
+
+  const container = document.querySelector("#youtube-runner-player");
+  if (!container) return;
+
+  const url = container.dataset.youtubeUrl;
+  const timeRange = container.dataset.timeRange;
+  const videoId = youtubeVideoId(url);
+  if (!videoId) return;
+
+  const { start, end } = parseTimeRange(timeRange);
+
+  loadYouTubeApi().then((yt) => {
+    if (!document.querySelector("#youtube-runner-player")) return;
+
+    const playerVars = {
+      rel: 0,
+      playsinline: 1,
+      enablejsapi: 1,
+    };
+    if (start !== null) playerVars.start = start;
+    if (end !== null && (start === null || end > start)) playerVars.end = end;
+
+    youtubeRunnerPlayer = new yt.Player("youtube-runner-player", {
+      videoId: videoId,
+      width: "100%",
+      height: "100%",
+      playerVars: playerVars,
+      events: {
+        onReady: () => {
+          youtubePollerId = window.setInterval(() => {
+            if (!youtubeRunnerPlayer || typeof youtubeRunnerPlayer.getCurrentTime !== "function") return;
+            
+            const currentTime = youtubeRunnerPlayer.getCurrentTime();
+            checkRunnerCountdown(currentTime, "youtube", youtubeRunnerPlayer);
+
+            if (end !== null && currentTime >= end) {
+              youtubeRunnerPlayer.pauseVideo();
+              if (start !== null) {
+                youtubeRunnerPlayer.seekTo(start, true);
+              } else {
+                youtubeRunnerPlayer.seekTo(0, true);
+              }
+            }
+          }, 150);
+        }
+      }
+    });
+  }).catch((err) => {
+    console.error("Failed to load YouTube player API in runner:", err);
+  });
+}
+
 function readAudioTime(value) {
   if (value === undefined) return null;
   const seconds = Number(value);
@@ -1070,6 +1388,8 @@ function readAudioTime(value) {
 async function onAction(event) {
   const target = event.currentTarget;
   const action = target.dataset.action;
+
+  cancelCountdownSequence();
 
   if (action === "show-flash") {
     showFlash();
@@ -1186,6 +1506,7 @@ async function onAction(event) {
 }
 
 function onProblemSelect(event) {
+  cancelCountdownSequence();
   state.selectedProblemId = event.currentTarget.value;
   clearReveals(state);
   saveState();
@@ -1193,22 +1514,42 @@ function onProblemSelect(event) {
 }
 
 function onSavedProblemSelect(event) {
+  cancelCountdownSequence();
   state.selectedSavedProblemId = event.currentTarget.value;
   saveState();
   render();
 }
 
 function onCustomProblemInput(event) {
-  state.customProblem[event.currentTarget.dataset.customProblemField] = event.currentTarget.value;
-  if (event.currentTarget.dataset.customProblemField === "problemUrl" && event.currentTarget.value.trim()) {
+  const field = event.currentTarget.dataset.customProblemField;
+  const value = event.currentTarget.type === "checkbox" ? event.currentTarget.checked : event.currentTarget.value;
+  state.customProblem[field] = value;
+
+  if (field === "problemUrl" && typeof value === "string" && value.trim()) {
     state.customProblem.sourceType = "link";
   }
+
+  if (field === "hasProblemRange") {
+    if (state.customProblem.hasProblemRange && !state.customProblem.problemRange) {
+      state.customProblem.problemRange = state.customProblem.timeRange;
+    }
+    saveState();
+    render();
+    return;
+  }
+
   saveState();
-  if (event.currentTarget.dataset.customProblemField === "problemUrl") {
+
+  if (field === "problemUrl") {
     updateYouTubeLinkPreview();
     syncCustomMediaDuration();
   }
-  if (event.currentTarget.dataset.customProblemField === "timeRange") updateMediaRangeControls();
+  if (field === "timeRange") {
+    updateMediaRangeControls();
+  }
+  if (field === "problemRange") {
+    updateProblemRangeControls();
+  }
   refreshMakerPreview();
 }
 
@@ -1257,6 +1598,45 @@ function onTimeDirectInput(event) {
   refreshMakerPreview();
 }
 
+function onProblemTimeRangeSliderInput(event) {
+  const startInput = document.querySelector('[data-problem-time-range-bound="start"]');
+  const endInput = document.querySelector('[data-problem-time-range-bound="end"]');
+  if (!startInput || !endInput) return;
+
+  let start = Number(startInput.value) || 0;
+  let end = Number(endInput.value) || 0;
+  if (event.currentTarget.dataset.problemTimeRangeBound === "start" && start > end) end = start;
+  if (event.currentTarget.dataset.problemTimeRangeBound === "end" && end < start) start = end;
+
+  state.customProblem.problemRange = formatTimeRange(start, end);
+  saveState();
+  updateProblemRangeControls(start, end);
+  refreshMakerPreview();
+}
+
+function onProblemTimeDirectInput(event) {
+  const range = problemRangeValues(state.customProblem.problemRange, state.customProblem.timeRange, customMediaDuration);
+  const startInput = document.querySelector('[data-problem-time-direct="start"]');
+  const endInput = document.querySelector('[data-problem-time-direct="end"]');
+  if (!startInput || !endInput) return;
+
+  let start = parseTimestamp(startInput.value);
+  let end = parseTimestamp(endInput.value);
+  start = start === null ? range.start : start;
+  end = end === null ? range.end : end;
+  if (range.hasDuration) {
+    start = Math.max(range.min, Math.min(start, range.max));
+    end = Math.max(range.min, Math.min(end, range.max));
+  }
+  if (event.currentTarget.dataset.problemTimeDirect === "start" && start > end) end = start;
+  if (event.currentTarget.dataset.problemTimeDirect === "end" && end < start) start = end;
+
+  state.customProblem.problemRange = formatTimeRange(start, end);
+  saveState();
+  updateProblemRangeControls(start, end);
+  refreshMakerPreview();
+}
+
 function updateMediaRangeControls(nextStart, nextEnd) {
   const range = mediaRangeValues(
     nextStart !== undefined && nextEnd !== undefined ? formatTimeRange(nextStart, nextEnd) : state.customProblem.timeRange
@@ -1282,11 +1662,68 @@ function updateMediaRangeControls(nextStart, nextEnd) {
   });
   if (startInput) startInput.value = String(range.start);
   if (endInput) endInput.value = String(range.end);
-  if (startLabel) startLabel.textContent = formatTimestamp(range.start);
-  if (endLabel) endLabel.textContent = formatTimestamp(range.end);
+  if (startLabel) startLabel.textContent = formatTimestamp(0);
+  if (endLabel) endLabel.textContent = formatTimestamp(range.max);
   if (directStartInput) directStartInput.value = formatTimestamp(range.start);
   if (directEndInput) directEndInput.value = formatTimestamp(range.end);
-  if (summary) summary.textContent = `선택 구간 ${formatTimestamp(range.end - range.start)}`;
+  if (summary) summary.textContent = `선택 구간: ${formatTimestamp(range.start)} - ${formatTimestamp(range.end)} (총 ${formatTimestamp(range.end - range.start)})`;
+  if (rangeControl) {
+    rangeControl.style.setProperty("--range-start", `${startPercent}%`);
+    rangeControl.style.setProperty("--range-end", `${endPercent}%`);
+  }
+
+  // 문제 구간도 동일한 타이밍에 싱크 맞춤
+  if (state.customProblem.hasProblemRange) {
+    updateProblemRangeControls();
+  }
+}
+
+function updateProblemRangeControls(nextStart, nextEnd) {
+  const problemRange = problemRangeValues(
+    nextStart !== undefined && nextEnd !== undefined ? formatTimeRange(nextStart, nextEnd) : state.customProblem.problemRange,
+    state.customProblem.timeRange,
+    customMediaDuration
+  );
+  
+  const startInput = document.querySelector('[data-problem-time-range-bound="start"]');
+  const endInput = document.querySelector('[data-problem-time-range-bound="end"]');
+  const textInput = document.querySelector('[data-custom-problem-field="problemRange"]');
+  const directStartInput = document.querySelector('[data-problem-time-direct="start"]');
+  const directEndInput = document.querySelector('[data-problem-time-direct="end"]');
+  const rangeControl = document.querySelector("[data-problem-range-control]");
+  const startLabel = document.querySelector("[data-problem-range-start-label]");
+  const endLabel = document.querySelector("[data-problem-range-end-label]");
+  const durationLabel = document.querySelector("[data-problem-duration-label]");
+  const summary = document.querySelector("[data-problem-range-summary]");
+
+  const denom = Math.max(1, problemRange.max - problemRange.min);
+  const startPercent = ((problemRange.start - problemRange.min) / denom) * 100;
+  const endPercent = ((problemRange.end - problemRange.min) / denom) * 100;
+
+  const clampedRangeStr = formatTimeRange(problemRange.start, problemRange.end);
+  if (state.customProblem.problemRange !== clampedRangeStr) {
+    state.customProblem.problemRange = clampedRangeStr;
+    saveState();
+  }
+
+  if (textInput) textInput.value = clampedRangeStr;
+  if (durationLabel) {
+    durationLabel.textContent = problemRange.hasDuration 
+      ? `재생 구간 내 지정: ${formatTimestamp(problemRange.min)} ~ ${formatTimestamp(problemRange.max)} (${formatDurationLabel(problemRange.max - problemRange.min)})` 
+      : "미디어 길이 인식 대기";
+  }
+  [startInput, endInput].filter(Boolean).forEach((input) => {
+    input.min = String(problemRange.min);
+    input.max = String(problemRange.max);
+    input.disabled = !problemRange.hasDuration;
+  });
+  if (startInput) startInput.value = String(problemRange.start);
+  if (endInput) endInput.value = String(problemRange.end);
+  if (startLabel) startLabel.textContent = formatTimestamp(problemRange.min);
+  if (endLabel) endLabel.textContent = formatTimestamp(problemRange.max);
+  if (directStartInput) directStartInput.value = formatTimestamp(problemRange.start);
+  if (directEndInput) directEndInput.value = formatTimestamp(problemRange.end);
+  if (summary) summary.textContent = `선택 문제 구간: ${formatTimestamp(problemRange.start)} - ${formatTimestamp(problemRange.end)} (총 ${formatTimestamp(problemRange.end - problemRange.start)})`;
   if (rangeControl) {
     rangeControl.style.setProperty("--range-start", `${startPercent}%`);
     rangeControl.style.setProperty("--range-end", `${endPercent}%`);
@@ -1307,6 +1744,11 @@ function applyCustomMediaDuration(duration) {
       state.customProblem.timeRange = clampedRange;
       saveState();
     }
+  }
+  if (state.customProblem.hasProblemRange) {
+    const pRange = problemRangeValues(state.customProblem.problemRange, state.customProblem.timeRange, customMediaDuration);
+    state.customProblem.problemRange = formatTimeRange(pRange.start, pRange.end);
+    saveState();
   }
   updateMediaRangeControls();
 }

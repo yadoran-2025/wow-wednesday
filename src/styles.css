@@ -1233,3 +1233,141 @@ select {
     width: 100%;
   }
 }
+
+/* ==========================================================================
+   Wow Wednesday - Countdown Overlay & Problem Range Premium Styling
+   ========================================================================== */
+
+/* 1. Checkbox Label & Custom Controls Styling */
+.checkbox-label {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  cursor: pointer;
+  color: var(--app-ink);
+  font-size: var(--text-sm);
+  font-weight: var(--weight-bold);
+  user-select: none;
+  transition: opacity var(--dur-fast) ease;
+}
+
+.checkbox-label:hover {
+  opacity: 0.85;
+}
+
+.checkbox-label input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  accent-color: var(--color-primary);
+  cursor: pointer;
+}
+
+/* 2. Problem Range Slider Distinct Theme (Amber/Orange Tone) */
+.media-range-control--problem {
+  border-color: rgba(217, 138, 43, 0.26);
+  background: rgba(255, 252, 245, 0.85);
+}
+
+.media-range-control--problem .media-range-control__selection {
+  background: var(--color-accent);
+}
+
+.media-range-control--problem .media-range-control__slider::-webkit-slider-thumb {
+  background: var(--color-accent);
+  box-shadow: 0 2px 8px rgba(217, 138, 43, 0.35);
+}
+
+.media-range-control--problem .media-range-control__slider::-moz-range-thumb {
+  background: var(--color-accent);
+  box-shadow: 0 2px 8px rgba(217, 138, 43, 0.35);
+}
+
+.media-range-control--problem .media-range-control__time-input:focus {
+  border-color: var(--color-accent);
+  box-shadow: 0 0 0 3px rgba(217, 138, 43, 0.16);
+}
+
+/* 3. YouTube Placeholder style matching standard iframe */
+.media-panel iframe,
+#youtube-runner-player {
+  width: 100%;
+  aspect-ratio: 16 / 9;
+  border: 0;
+  border-radius: var(--radius-md);
+  background: var(--app-ink);
+}
+
+/* 4. Countdown Presentation Overlay (Premium Backdrop-blur & Glows) */
+.countdown-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-modal);
+  display: grid;
+  place-items: center;
+  background: rgba(10, 16, 26, 0.68);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  transition: opacity 0.3s ease;
+}
+
+.countdown-overlay.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.countdown-circle {
+  display: grid;
+  place-items: center;
+  width: min(240px, 50vw);
+  height: min(240px, 50vw);
+  border: 4px solid rgba(255, 255, 255, 0.18);
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.06);
+  box-shadow: 
+    0 16px 48px rgba(0, 0, 0, 0.35),
+    inset 0 0 32px rgba(255, 255, 255, 0.05),
+    0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+
+.countdown-number {
+  color: #ffffff;
+  font-family: var(--font-sans);
+  font-size: clamp(4.5rem, 10vw, 8.5rem);
+  font-weight: 900;
+  line-height: 1;
+  white-space: nowrap;
+  text-align: center;
+  text-shadow: 
+    0 0 16px rgba(27, 107, 255, 0.8),
+    0 0 36px rgba(27, 107, 255, 0.4);
+}
+
+/* Gold theme for the final start cue */
+.countdown-number.is-start {
+  font-size: clamp(3.2rem, 7vw, 5.2rem);
+  color: #fff2c8;
+  text-shadow: 
+    0 0 20px rgba(217, 138, 43, 0.9),
+    0 0 40px rgba(217, 138, 43, 0.5);
+}
+
+.countdown-number.pulse {
+  animation: pulseScale 0.45s cubic-bezier(0.175, 0.885, 0.32, 1.275) both;
+}
+
+@keyframes pulseScale {
+  0% {
+    transform: scale(0.6);
+    opacity: 0.3;
+    filter: blur(4px);
+  }
+  50% {
+    transform: scale(1.1);
+    opacity: 1;
+    filter: blur(0);
+  }
+  100% {
+    transform: scale(1.0);
+    opacity: 1;
+  }
+}
