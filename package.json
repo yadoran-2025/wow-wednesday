@@ -1,4 +1,9 @@
 {
+  "scripts": {
+    "start": "node webapp.mjs",
+    "test": "node tests/self-check.mjs",
+    "test:browser": "node tests/browser-check.mjs"
+  },
   "dependencies": {
     "@yadoran-2025/booong-design-system": "^2.0.0"
   }

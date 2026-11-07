@@ -1,0 +1,22 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="theme-color" content="#4855ce">
+  <title>놀라운 수요일 · 목업</title>
+  <link rel="icon" href="../assets/favicon.svg">
+  <link rel="stylesheet" href="./style.css">
+</head>
+<body>
+  <div id="app"></div>
+  <div id="toast" role="status" aria-live="polite"></div>
+  <dialog id="flash" aria-label="0.3초 힌트"><p></p></dialog>
+  <dialog id="answer-confirm" aria-labelledby="answer-title">
+    <h2 id="answer-title">정답을 공개할까요?</h2>
+    <p>받쓰판의 모든 글자가 학생들에게 보입니다.</p>
+    <div class="dialog-actions"><button data-action="cancel-answer">취소</button><button class="primary" data-action="confirm-answer">정답 공개</button></div>
+  </dialog>
+  <script src="./app.js"></script>
+</body>
+</html>
